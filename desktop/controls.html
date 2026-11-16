@@ -1,0 +1,118 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'"
+    />
+    <title>Relay recording controls</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: #20281d;
+        color: #f7f9ef;
+        font: 13px system-ui;
+        border: 1px solid #526247;
+        border-radius: 12px;
+        padding: 14px;
+        height: 205px;
+      }
+      .top {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        -webkit-app-region: drag;
+      }
+      b {
+        font-size: 17px;
+        font-variant-numeric: tabular-nums;
+      }
+      .dot {
+        width: 9px;
+        height: 9px;
+        background: #e87560;
+        border-radius: 100%;
+        animation: blink 1.4s ease-in-out infinite;
+      }
+      body.paused .dot {
+        background: #c9b46a;
+        animation: none;
+      }
+      @keyframes blink {
+        50% {
+          opacity: 0.35;
+        }
+      }
+      button {
+        border: 0;
+        border-radius: 7px;
+        color: inherit;
+        background: #35432d;
+        padding: 9px 10px;
+        cursor: pointer;
+        -webkit-app-region: no-drag;
+        white-space: nowrap;
+      }
+      button:hover {
+        background: #43543a;
+      }
+      button:focus-visible {
+        outline: 2px solid #d6f475;
+      }
+      #stop {
+        background: #d6f475;
+        color: #20281d;
+        font-weight: 600;
+      }
+      #draw[aria-pressed="true"] {
+        background: #ff5a36;
+        color: #fff;
+      }
+      #cancel {
+        margin-left: auto;
+        background: transparent;
+        color: #e8a598;
+      }
+      .buttons {
+        display: flex;
+        gap: 6px;
+        margin: 12px 0;
+      }
+      .notes {
+        height: 92px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        color: #d0d9c8;
+        line-height: 1.6;
+      }
+      .brand {
+        margin-left: auto;
+        color: #9fb08f;
+        font-size: 11px;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .dot {
+          animation: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="top">
+      <i class="dot"></i><b id="time">0:00</b><span id="status">Recording</span
+      ><span class="brand">⌘⇧R finish · ⌥⇧P pause</span>
+    </div>
+    <div class="buttons">
+      <button id="pause">Pause</button><button id="retake" title="Cut the last 10 seconds">Retake 10s</button
+      ><button id="draw" aria-pressed="false" title="Draw on screen (⌥⇧D)">Draw</button
+      ><button id="stop">Finish</button><button id="studio" title="Show Relay">↗</button
+      ><button id="cancel" title="Discard this recording (⌥⇧C)">Discard</button>
+    </div>
+    <div class="notes" id="notes">Your talking points appear here.</div>
+    <script src="controls.js"></script>
+  </body>
+</html>

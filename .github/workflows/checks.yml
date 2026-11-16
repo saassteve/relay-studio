@@ -1,0 +1,31 @@
+name: Relay checks
+on: [push, pull_request]
+jobs:
+  studio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      # ffmpeg-static's Linux build lacks the subtitles/drawtext filters used by renders.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: npm run build
+      - run: npm test
+        env:
+          FFMPEG_BIN: /usr/bin/ffmpeg
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+        env:
+          RELAY_BROWSER_CHANNEL: chromium
+          FFMPEG_BIN: /usr/bin/ffmpeg
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: relay-test-results
+          path: test-results/

@@ -1,0 +1,13 @@
+services:
+  relay:
+    build: .
+    ports:
+      - "127.0.0.1:5173:5173"
+    environment:
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD to at least 12 characters in .env}
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:5173}
+    volumes:
+      - relay-data:/app/data
+    restart: unless-stopped
+volumes:
+  relay-data:

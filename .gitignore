@@ -1,0 +1,12 @@
+node_modules/
+dist/
+data/
+release/
+test-results/
+playwright-report/
+.env
+*.tsbuildinfo
+.DS_Store
+vendor/ffmpeg/*/
+vendor/ffmpeg/*.zip
+vendor/ffmpeg/*.sha256

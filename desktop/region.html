@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'"
+    />
+    <title>Select recording region</title>
+    <style>
+      body {
+        margin: 0;
+        background: #10200e55;
+        cursor: crosshair;
+        user-select: none;
+        font: 15px system-ui;
+        color: white;
+      }
+      p {
+        position: absolute;
+        top: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #20281d;
+        padding: 14px 24px;
+        border-radius: 30px;
+        pointer-events: none;
+      }
+      #region {
+        position: absolute;
+        border: 2px solid #d6f475;
+        background: #d6f47511;
+        box-shadow: 0 0 0 9999px #0004;
+        display: none;
+      }
+      small {
+        opacity: 0.6;
+      }
+    </style>
+  </head>
+  <body>
+    <p>Drag to select your recording region. <small>Esc to cancel</small></p>
+    <div id="region"></div>
+    <script src="region.js"></script>
+  </body>
+</html>

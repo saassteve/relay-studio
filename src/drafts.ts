@@ -1,0 +1,300 @@
+import { api, type Clip, type Project, type Job } from "./types";
+export type TrackRole = "screen" | "camera" | "microphone" | "system";
+export interface Draft {
+  id: string;
+  title: string;
+  created: string;
+  status:
+    "recording" | "review" | "queued" | "processing" | "complete" | "discarded";
+  duration: number;
+  meta: {
+    roles: TrackRole[];
+    layout?: Project["layout"];
+    excluded?: { start: number; end: number }[];
+    pointers?: { time: number; x: number; y: number }[];
+  };
+  jobId?: string;
+  videoId?: string;
+  error?: string;
+}
+interface Part {
+  key: string;
+  recordingId: string;
+  role: TrackRole;
+  seq: number;
+  mime: string;
+  blob: Blob;
+  end: number;
+  uploaded: boolean;
+}
+let database: Promise<IDBDatabase> | undefined;
+function db() {
+  return (database ??= new Promise((resolve, reject) => {
+    const request = indexedDB.open("relay-recordings", 1);
+    request.onupgradeneeded = () => {
+      const d = request.result;
+      d.createObjectStore("drafts", { keyPath: "id" });
+      const p = d.createObjectStore("parts", { keyPath: "key" });
+      p.createIndex("recordingId", "recordingId");
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  }));
+}
+async function store<T>(
+  name: "drafts" | "parts",
+  mode: IDBTransactionMode,
+  action: (s: IDBObjectStore) => IDBRequest<T>,
+): Promise<T> {
+  const d = await db();
+  return new Promise((resolve, reject) => {
+    const tx = d.transaction(name, mode),
+      request = action(tx.objectStore(name));
+    let result: T;
+    request.onsuccess = () => (result = request.result);
+    tx.oncomplete = () => resolve(result);
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () =>
+      reject(tx.error || new Error("Local storage is unavailable."));
+  });
+}
+const changed = () => dispatchEvent(new CustomEvent("relay:drafts"));
+export const listDrafts = () =>
+  store<Draft[]>("drafts", "readonly", (s) => s.getAll());
+export const getDraft = (id: string) =>
+  store<Draft | undefined>("drafts", "readonly", (s) => s.get(id));
+export async function updateDraft(id: string, patch: Partial<Draft>) {
+  const d = await getDraft(id);
+  if (!d) throw new Error("This local recording was not found.");
+  const next = { ...d, ...patch };
+  await store("drafts", "readwrite", (s) => s.put(next));
+  changed();
+  return next;
+}
+export async function createDraft(meta: Draft["meta"]) {
+  void navigator.storage?.persist?.();
+  const draft: Draft = {
+    id: crypto.randomUUID(),
+    title: `Recording · ${new Date().toLocaleDateString()}`,
+    created: new Date().toISOString(),
+    status: "recording",
+    duration: 0,
+    meta,
+  };
+  await store("drafts", "readwrite", (s) => s.put(draft));
+  changed();
+  void syncDraft(draft.id);
+  return draft;
+}
+export async function savePart(
+  id: string,
+  role: TrackRole,
+  seq: number,
+  blob: Blob,
+  end: number,
+) {
+  const part: Part = {
+    key: `${id}:${role}:${seq}`,
+    recordingId: id,
+    role,
+    seq,
+    blob,
+    mime: blob.type,
+    end,
+    uploaded: false,
+  };
+  await store("parts", "readwrite", (s) => s.put(part));
+  await updateDraft(id, { duration: end });
+  void syncDraft(id);
+}
+const parts = (id: string) =>
+  store<Part[]>("parts", "readonly", (s) => s.index("recordingId").getAll(id));
+const running = new Map<string, Promise<void>>();
+export function syncDraft(id: string): Promise<void> {
+  if (running.has(id)) return running.get(id)!;
+  const task = (async () => {
+    try {
+      let draft = await getDraft(id);
+      if (!draft || ["complete", "discarded"].includes(draft.status)) return;
+      await api("/api/recordings", {
+        method: "POST",
+        body: JSON.stringify({
+          id: draft.id,
+          title: draft.title,
+          meta: draft.meta,
+        }),
+      });
+      const pending = (await parts(id))
+        .filter((p) => !p.uploaded)
+        .sort((a, b) => a.seq - b.seq);
+      for (const part of pending) {
+        const response = await fetch(
+          `/api/recordings/${id}/parts/${part.role}/${part.seq}`,
+          {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/octet-stream",
+              "X-Track-Mime": part.mime,
+              "X-Part-End": String(part.end),
+            },
+            body: part.blob,
+          },
+        );
+        if (!response.ok) {
+          const b = await response.json();
+          throw new Error(b.error || "A recording chunk could not be saved.");
+        }
+        await store("parts", "readwrite", (s) =>
+          s.put({ ...part, uploaded: true }),
+        );
+      }
+      draft = (await getDraft(id))!;
+      if (["queued", "processing"].includes(draft.status)) {
+        // A capture may have flushed its final chunk while this upload was running.
+        // Leave the draft queued until every durable local part has reached the server.
+        if ((await parts(id)).some((p) => !p.uploaded)) return;
+        if (!draft.jobId) {
+          const job = await api<Job>(`/api/recordings/${id}/finish`, {
+            method: "POST",
+            body: JSON.stringify({
+              duration: draft.duration,
+              title: draft.title,
+              meta: draft.meta,
+            }),
+          });
+          if (job.status === "complete" && job.result?.videoId) {
+            await finishLocal(id, job.result.videoId);
+            return;
+          }
+          draft = await updateDraft(id, {
+            status: "processing",
+            jobId: job.id,
+            error: undefined,
+          });
+        }
+        if (draft.jobId) {
+          const job = await api<Job>(`/api/jobs/${draft.jobId}`);
+          if (job.status === "complete" && job.result?.videoId)
+            await finishLocal(id, job.result.videoId);
+          else if (job.status === "failed")
+            throw new Error(
+              job.error || "The recording could not be processed.",
+            );
+        }
+      }
+      if (draft.error) await updateDraft(id, { error: undefined });
+    } catch (e) {
+      await updateDraft(id, { error: (e as Error).message }).catch(() => {});
+    }
+  })().finally(() => running.delete(id));
+  running.set(id, task);
+  return task;
+}
+async function finishLocal(id: string, videoId: string) {
+  await updateDraft(id, { status: "complete", videoId, error: undefined });
+  for (const p of await parts(id))
+    await store("parts", "readwrite", (s) => s.delete(p.key));
+  changed();
+}
+export async function queueDraft(
+  id: string,
+  title: string,
+  duration: number,
+  meta?: Draft["meta"],
+) {
+  const current = await getDraft(id);
+  if (current?.jobId) {
+    const job = await api<Job>(`/api/jobs/${current.jobId}`);
+    if (job.status === "failed") await updateDraft(id, { jobId: undefined });
+  }
+  await updateDraft(id, {
+    status: "queued",
+    title,
+    duration,
+    meta: meta || current!.meta,
+    error: undefined,
+  });
+  await syncDraft(id);
+  await syncDraft(id);
+}
+export async function waitForDraft(
+  id: string,
+  onProgress?: (s: string) => void,
+): Promise<Clip> {
+  const started = Date.now();
+  while (Date.now() - started < 1800000) {
+    await syncDraft(id);
+    const draft = await getDraft(id);
+    if (draft?.videoId) return api<Clip>(`/api/videos/${draft.videoId}`);
+    if (draft?.error && !draft.jobId && navigator.onLine)
+      throw new Error(draft.error);
+    if (draft?.error && !navigator.onLine)
+      throw new Error(
+        "Saved on this device. It will upload when you reconnect.",
+      );
+    if (draft?.jobId) {
+      const job = await api<Job>(`/api/jobs/${draft.jobId}`);
+      onProgress?.(`${Math.round(job.progress || 0)}%`);
+      if (job.status === "failed")
+        throw new Error(
+          job.error || "Processing failed. Your source tracks are safe.",
+        );
+    }
+    await new Promise((r) => setTimeout(r, 750));
+  }
+  throw new Error("Your recording is still processing in the background.");
+}
+export async function discardDraft(id: string) {
+  const draft = await getDraft(id);
+  if (draft?.status === "processing")
+    throw new Error("Wait for this recording to finish processing.");
+  await updateDraft(id, { status: "discarded" });
+  for (const part of await parts(id))
+    await store("parts", "readwrite", (s) => s.delete(part.key));
+  void api(`/api/recordings/${id}`, { method: "DELETE" }).catch(() => {});
+  changed();
+}
+export function startDraftSync(onComplete: () => void) {
+  let previous: Set<string> | undefined;
+  let stopped = false;
+  const tick = async () => {
+    const drafts = await listDrafts();
+    previous ??= new Set(
+      drafts.filter((d) => d.status === "complete").map((d) => d.id),
+    );
+    for (const draft of drafts) {
+      if (draft.status === "complete" && !previous.has(draft.id)) {
+        previous.add(draft.id);
+        onComplete();
+      }
+      if (["queued", "processing", "recording"].includes(draft.status))
+        void syncDraft(draft.id);
+    }
+  };
+  const online = () => void tick();
+  addEventListener("online", online);
+  void tick();
+  const timer = setInterval(() => {
+    if (!stopped) void tick();
+  }, 2500);
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+    removeEventListener("online", online);
+  };
+}
+export async function awaitJob(
+  job: Job,
+  onProgress?: (j: Job) => void,
+): Promise<Job> {
+  let current = job;
+  while (["queued", "running"].includes(current.status)) {
+    onProgress?.(current);
+    await new Promise((r) => setTimeout(r, 600));
+    current = await api<Job>(`/api/jobs/${job.id}`);
+  }
+  if (current.status !== "complete")
+    throw new Error(current.error || "Processing failed.");
+  onProgress?.(current);
+  return current;
+}
