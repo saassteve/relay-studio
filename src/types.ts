@@ -145,6 +145,10 @@ export interface Project {
     height: number;
     padding: number;
     background: string;
+    wallpaper?: string;
+    radius?: number;
+    shadow?: number;
+    preset?: "pip" | "side" | "screen" | "camera";
     camera: {
       visible: boolean;
       x: number;
@@ -173,6 +177,12 @@ export interface Project {
     text: string;
     color: string;
     auto?: boolean;
+  }[];
+  scenes?: {
+    id: string;
+    start: number;
+    end: number;
+    preset: "pip" | "side" | "screen" | "camera";
   }[];
   cta: { label: string; url: string };
 }

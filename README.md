@@ -53,6 +53,18 @@ The app is Mac-only for now. Everywhere else, [run Relay from source](#run-from-
 
 ---
 
+## Videos that look finished
+
+<p align="center">
+  <img src="docs/images/looks.png" alt="Three frames from Relay videos: framed on a wallpaper, side by side with the camera, and zoomed in" width="100%">
+</p>
+
+Every screen recording comes out **framed on a wallpaper** with rounded corners and a soft shadow. No editing needed. Then make it yours:
+
+- **Nine wallpapers**, plus padding, corner and shadow controls.
+- **Four layouts:** camera bubble, side by side, screen only, or just you. Change layout partway through and Relay blends from one to the next.
+- **Auto-zoom** follows what you point at, and only the screen zooms.
+
 ## What you get
 
 <table>
@@ -127,6 +139,8 @@ Relay also lives in your menu bar, with the timer and controls one click away.
 | 4K recording | ✓ | Paid plans |
 | Where videos live | Your Mac or your server | Loom's cloud |
 | Camera filters and virtual backgrounds | ✓ on-device | ✓ |
+| Wallpapers, rounded frames and shadows | ✓ | — |
+| Switch layouts mid-video | ✓ | — |
 | Auto-zoom to key moments | ✓ | — |
 | Edit by deleting words | ✓ | ✓ |
 | Transcripts and summaries | ✓ on-device | Cloud AI, paid plan |

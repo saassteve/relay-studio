@@ -1,9 +1,14 @@
 import { problem, parseJSON } from "./schema.mjs";
+import { WALLPAPERS, PRESETS } from "./compose.mjs";
 export const defaultLayout = () => ({
   width: 1280,
   height: 720,
   padding: 0,
   background: "#173e32",
+  wallpaper: "none",
+  radius: 0,
+  shadow: 0,
+  preset: "pip",
   camera: { visible: true, x: 0.03, y: 0.67, size: 0.17, shape: "circle" },
   audio: { microphone: 1, system: 1, normalize: true, denoise: false },
   captions: false,
@@ -66,6 +71,10 @@ export function validateProject(input, find) {
       "padding",
     ),
     background,
+    wallpaper: WALLPAPERS.includes(raw.wallpaper) ? raw.wallpaper : "none",
+    radius: number(raw.radius ?? 0, 0, 0.08, "corner radius"),
+    shadow: number(raw.shadow ?? 0, 0, 1, "shadow"),
+    preset: PRESETS.includes(raw.preset) ? raw.preset : "pip",
     camera: { ...camera, visible: camera.visible !== false },
     audio: {
       ...audio,
@@ -108,7 +117,25 @@ export function validateProject(input, find) {
   };
   if (cta.url && !/^https?:\/\//.test(cta.url))
     throw problem(400, "The call-to-action URL must use HTTP or HTTPS.");
-  return { version: 1, segments, layout, overlays, cta };
+  if (!Array.isArray(input.scenes || []) || (input.scenes || []).length > 40)
+    throw problem(400, "Use at most 40 layout changes.");
+  const scenes = (input.scenes || [])
+    .map((sc, i) => {
+      if (!PRESETS.includes(sc.preset))
+        throw problem(400, "Choose a supported layout.");
+      const start = number(sc.start, 0, total, "layout start"),
+        end = number(sc.end, 0, total + 0.05, "layout end");
+      if (end - start < 0.5)
+        throw problem(400, "A layout change must last at least half a second.");
+      return {
+        id: String(sc.id || i).slice(0, 80),
+        start,
+        end,
+        preset: sc.preset,
+      };
+    })
+    .sort((a, b) => a.start - b.start);
+  return { version: 1, segments, layout, overlays, scenes, cta };
 }
 export function getProject(v) {
   const p = parseJSON(v.project, {});

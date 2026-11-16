@@ -192,6 +192,14 @@ test("durable separate tracks survive a restart, compose, edit, publish and roun
     { sourceId: videoId, start: 1.4, end: 2.4 },
   ];
   project.layout.padding = 20;
+  project.layout.wallpaper = "dusk";
+  project.layout.radius = 0.02;
+  project.layout.shadow = 0.8;
+  // Switch layout partway: bubble, then side by side, then camera only.
+  project.scenes = [
+    { id: "s1", start: 0.6, end: 1.2, preset: "side" },
+    { id: "s2", start: 1.2, end: 1.8, preset: "camera" },
+  ];
   project.layout.camera.shape = "square";
   project.layout.audio.normalize = true;
   project.layout.audio.denoise = true;

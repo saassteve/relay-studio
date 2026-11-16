@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { LayoutPreview, LookControls } from "./LookPanel";
+import type { LayoutPreset } from "./layoutPlan";
 import {
   ArrowDown,
   ArrowUp,
@@ -48,6 +50,7 @@ export function StudioWorkbench({
     [videos, setVideos] = useState<Clip[]>([]),
     [addId, setAddId] = useState(""),
     [selectedRaw, setSelected] = useState(0),
+    [previewing, setPreviewing] = useState("base"),
     [cutStart, setCutStart] = useState(0),
     [cutEnd, setCutEnd] = useState(1),
     [error, setError] = useState(""),
@@ -77,7 +80,8 @@ export function StudioWorkbench({
   const undo = useRef<Project[]>([]),
     redo = useRef<Project[]>([]),
     importCaptions = useRef<HTMLInputElement>(null),
-    preview = useRef<HTMLDivElement>(null);
+    unused = useRef<HTMLDivElement>(null);
+  void unused;
   const load = async () => {
     const s = await api<ProjectState>(`/api/videos/${clip.id}/project`);
     setState(s);
@@ -161,6 +165,10 @@ export function StudioWorkbench({
   const selected = Math.max(
     0,
     Math.min(selectedRaw, (project?.segments.length ?? 1) - 1),
+  );
+  const hasCameraTrack = Boolean(
+    state?.sources.some((x) => x.role === "screen") &&
+    state?.sources.some((x) => x.role === "camera"),
   );
   const history = async (direction: "undo" | "redo") => {
     if (!project) return;
@@ -729,64 +737,29 @@ export function StudioWorkbench({
         <div className="studio-content">
           <div className="style-layout">
             <div>
-              <div
-                className="composition-preview"
-                ref={preview}
-                style={{
-                  aspectRatio: `${project.layout.width}/${project.layout.height}`,
-                  background: project.layout.background,
-                }}
-              >
-                <video
-                  src={`/api/videos/${project.segments[0].sourceId}/tracks/${state.sources.some((s) => s.role === "screen") ? "screen" : state.sources.some((s) => s.role === "primary") ? "primary" : "camera"}`}
-                  muted
-                  playsInline
-                  preload="auto"
-                  style={{
-                    inset: `${(project.layout.padding / project.layout.width) * 100}%`,
-                    width: `${100 - (project.layout.padding / project.layout.width) * 200}%`,
-                    height: `${100 - (project.layout.padding / project.layout.height) * 200}%`,
-                  }}
-                />
-                {state.sources.some((s) => s.role === "screen") &&
-                  state.sources.some((s) => s.role === "camera") &&
-                  project.layout.camera.visible && (
-                    <video
-                      className="composition-camera"
-                      src={`/api/videos/${clip.id}/tracks/camera`}
-                      muted
-                      playsInline
-                      preload="auto"
-                      style={{
-                        left: `${project.layout.camera.x * 100}%`,
-                        top: `${project.layout.camera.y * 100}%`,
-                        width: `${project.layout.camera.size * 100}%`,
-                        height:
-                          project.layout.camera.shape === "portrait"
-                            ? `${((project.layout.camera.size * project.layout.width) / project.layout.height) * 135}%`
-                            : `${((project.layout.camera.size * project.layout.width) / project.layout.height) * 100}%`,
-                        borderRadius:
-                          project.layout.camera.shape === "circle"
-                            ? "50%"
-                            : "8px",
-                      }}
-                    />
-                  )}
-              </div>
-              <button
-                className="text-button small"
-                onClick={() =>
-                  preview.current?.querySelectorAll("video").forEach((v) => {
-                    if (v.paused) void v.play().catch(() => {});
-                    else v.pause();
-                  })
+              <LayoutPreview
+                project={project}
+                preset={
+                  ((project.scenes || []).find((x) => x.id === previewing)
+                    ?.preset ||
+                    project.layout.preset ||
+                    "pip") as LayoutPreset
                 }
-              >
-                <Play size={13} />
-                Preview source layout
-              </button>
+                screenSrc={`/api/videos/${project.segments[0].sourceId}/tracks/${state.sources.some((x) => x.role === "screen") ? "screen" : state.sources.some((x) => x.role === "primary") ? "primary" : "camera"}`}
+                cameraSrc={
+                  hasCameraTrack ? `/api/videos/${clip.id}/tracks/camera` : null
+                }
+              />
             </div>
             <div className="style-controls">
+              <LookControls
+                project={project}
+                total={total}
+                hasCamera={hasCameraTrack}
+                edit={edit}
+                previewing={previewing}
+                setPreviewing={setPreviewing}
+              />
               <label>
                 Canvas
                 <select
@@ -830,22 +803,6 @@ export function StudioWorkbench({
                   value={project.layout.background}
                   onChange={(e) =>
                     edit((p) => (p.layout.background = e.target.value))
-                  }
-                />
-              </label>
-              <label>
-                Canvas padding
-                <input
-                  aria-label="Canvas padding"
-                  type="range"
-                  min={0}
-                  max={Math.floor(
-                    Math.min(project.layout.width, project.layout.height) / 3,
-                  )}
-                  step={2}
-                  value={project.layout.padding}
-                  onChange={(e) =>
-                    edit((p) => (p.layout.padding = +e.target.value))
                   }
                 />
               </label>

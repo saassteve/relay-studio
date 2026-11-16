@@ -63,11 +63,15 @@ export function createApp({
   if (localSecret)
     app.use((req, res, next) => {
       const p = req.path.toLowerCase();
-      if ((!p.startsWith("/api/") && p !== "/mcp") || p.startsWith("/api/share/"))
+      if (
+        (!p.startsWith("/api/") && p !== "/mcp") ||
+        p.startsWith("/api/share/")
+      )
         return next();
       const given =
-        req.headers.cookie?.match(/(?:^|;\s*)relay_local=([a-f0-9]{64})(?:;|$)/)?.[1] ||
-        "";
+        req.headers.cookie?.match(
+          /(?:^|;\s*)relay_local=([a-f0-9]{64})(?:;|$)/,
+        )?.[1] || "";
       if (p === "/mcp" && req.get("authorization")) return next();
       if (given !== localSecret)
         return res

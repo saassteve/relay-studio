@@ -51,9 +51,20 @@ test("reversible sections, captions, presentation, access and offline shell", as
   await expect(page.locator(".studio-workbench .error")).toHaveCount(0);
   await tab.getByRole("button", { name: /Presentation/ }).click();
   await page.getByLabel("Canvas preset").selectOption("1080x1080");
-  await expect(page.locator(".composition-preview")).toHaveCSS(
+  await expect(page.locator(".look-canvas")).toHaveCSS(
     "aspect-ratio",
     "1080 / 1080",
+  );
+  // Picking a wallpaper frames the video: padding, rounded corners and a shadow.
+  await page.getByRole("radio", { name: "dusk wallpaper" }).click();
+  await expect(page.locator(".look-canvas")).toHaveCSS(
+    "background-image",
+    /wallpapers\/dusk\.jpg/,
+  );
+  await expect(page.getByLabel("Corner radius")).not.toHaveValue("0");
+  await expect(page.locator(".look-canvas > video").first()).not.toHaveCSS(
+    "box-shadow",
+    "none",
   );
   await page.screenshot({
     path: "test-results/studio-desktop.png",

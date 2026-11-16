@@ -1,0 +1,233 @@
+.look-canvas {
+  position: relative;
+  width: 100%;
+  border-radius: 12px;
+  overflow: hidden;
+  container-type: inline-size;
+  box-shadow: 0 10px 40px #173e3222;
+}
+.look-canvas > video {
+  position: absolute;
+  object-fit: cover;
+  background: #0b1612;
+  transition:
+    left 0.45s cubic-bezier(0.3, 0.7, 0.2, 1),
+    top 0.45s cubic-bezier(0.3, 0.7, 0.2, 1),
+    width 0.45s cubic-bezier(0.3, 0.7, 0.2, 1),
+    height 0.45s cubic-bezier(0.3, 0.7, 0.2, 1),
+    border-radius 0.45s,
+    opacity 0.3s;
+}
+.look-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+.look-group {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.look-group > strong {
+  font-size: 12px;
+  color: var(--pine);
+}
+.wallpaper-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 7px;
+}
+.wallpaper-grid button {
+  aspect-ratio: 16/10;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #f1f4ea center / cover;
+  display: grid;
+  place-items: center;
+  color: #6c786f;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  transition: transform 0.15s;
+}
+.wallpaper-grid button:hover {
+  transform: scale(1.04);
+}
+.wallpaper-grid button.selected {
+  outline-color: var(--pine);
+}
+.look-sliders label {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  align-items: center;
+  font-size: 12px;
+}
+.preset-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 7px;
+}
+.preset-tiles button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 6px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #fffffb;
+  font-size: 11px;
+  font-weight: 550;
+  color: #5d6b61;
+}
+.preset-tiles button.selected {
+  border-color: var(--pine);
+  background: #eef2e6;
+  color: var(--pine);
+}
+.preset-tiles.small {
+  display: inline-flex;
+  gap: 4px;
+}
+.preset-tiles.small button {
+  padding: 4px;
+  border-radius: 7px;
+}
+/* Tiny diagrams of each layout: b is the screen, u is the camera. */
+.preset-art {
+  position: relative;
+  display: block;
+  width: 46px;
+  height: 29px;
+  border-radius: 5px;
+  background: linear-gradient(135deg, #2f7a5e, #173e32);
+}
+.preset-tiles.small .preset-art {
+  width: 30px;
+  height: 19px;
+  border-radius: 4px;
+}
+.preset-art b,
+.preset-art u {
+  position: absolute;
+  border-radius: 2px;
+}
+.preset-art b {
+  background: #fbfcf8;
+}
+.preset-art u {
+  background: var(--lime);
+}
+.preset-art.pip b {
+  inset: 12%;
+}
+.preset-art.pip u {
+  left: 7%;
+  bottom: 9%;
+  width: 26%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+}
+.preset-art.side b {
+  left: 8%;
+  top: 22%;
+  width: 54%;
+  height: 56%;
+}
+.preset-art.side u {
+  right: 8%;
+  top: 22%;
+  width: 24%;
+  height: 56%;
+}
+.preset-art.screen b {
+  inset: 12%;
+}
+.preset-art.screen u,
+.preset-art.camera b {
+  display: none;
+}
+.preset-art.camera u {
+  inset: 12%;
+}
+.scene-strip {
+  position: relative;
+  height: 8px;
+  border-radius: 8px;
+  background: #e6ebdf;
+  margin-top: 4px;
+}
+.scene-strip i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 8px;
+  background: #8fb35a;
+}
+.scene-strip i.active {
+  background: var(--pine);
+}
+.scene-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fffffb;
+  font-size: 11px;
+  cursor: pointer;
+}
+.scene-row.active {
+  border-color: #8fb35a;
+}
+.scene-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.scene-row input {
+  width: 62px;
+}
+.scene-row .icon-button {
+  margin-left: auto;
+}
+.style-layout {
+  grid-template-columns: minmax(0, 1.25fr) minmax(300px, 1fr);
+  gap: 28px;
+}
+.style-layout > div:first-child {
+  position: sticky;
+  top: 16px;
+}
+.style-controls .look-controls {
+  grid-column: 1 / -1;
+}
+.style-controls .look-sliders label {
+  display: grid;
+  grid-template-columns: 118px 1fr;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+}
+.style-controls .scene-row label {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+.style-controls .scene-row input[type="number"] {
+  width: 68px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+@media (max-width: 900px) {
+  .style-layout {
+    grid-template-columns: 1fr;
+  }
+  .style-layout > div:first-child {
+    position: static;
+  }
+}

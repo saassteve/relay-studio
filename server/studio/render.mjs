@@ -1,4 +1,37 @@
 import { zoomFilter } from "./autozoom.mjs";
+import { createArtwork, planLayout } from "./compose.mjs";
+
+// Splits a section into stretches that each use one layout.
+export function layoutPieces(scenes, offset, length, base) {
+  const points = new Set([0, length]);
+  const local = scenes
+    .map((s) => ({
+      start: Math.max(0, s.start - offset),
+      end: Math.min(length, s.end - offset),
+      preset: s.preset,
+    }))
+    .filter((s) => s.end - s.start > 0.05);
+  for (const s of local) points.add(s.start).add(s.end);
+  const cuts = [...points].sort((a, b) => a - b);
+  const pieces = [];
+  for (let i = 0; i < cuts.length - 1; i++) {
+    const start = cuts[i],
+      end = cuts[i + 1],
+      mid = (start + end) / 2,
+      scene = local.findLast((s) => mid >= s.start && mid < s.end),
+      preset = scene ? scene.preset : base,
+      previous = pieces.at(-1);
+    // Join equal neighbours, and fold slivers into what came before.
+    if (previous && (previous.preset === preset || end - start < 0.6))
+      previous.end = end;
+    else pieces.push({ start, end, preset });
+  }
+  if (pieces.length > 1 && pieces[0].end - pieces[0].start < 0.6) {
+    pieces[1].start = 0;
+    pieces.shift();
+  }
+  return pieces;
+}
 import { existsSync as exists } from "node:fs";
 import { fileURLToPath } from "node:url";
 // Fonts ship in public/ from source and in dist/ in production images.
@@ -82,11 +115,161 @@ export function createRenderer({ db, dataDir, find }) {
     const temp = mkdtempSync(path.join(dataDir, "tmp", "render-"));
     const l = project.layout,
       W = l.width,
-      H = l.height,
-      pad = Math.round(l.padding / 2) * 2,
-      innerW = W - pad * 2,
-      innerH = H - pad * 2,
-      color = l.background.replace("#", "0x");
+      H = l.height;
+    const art = createArtwork(temp, l);
+    const encode = (crf) => [
+      "-c:v",
+      "libx264",
+      "-preset",
+      "veryfast",
+      "-crf",
+      String(crf),
+      "-pix_fmt",
+      "yuv420p",
+      "-threads",
+      "2",
+    ];
+    const exec = (args) =>
+      run(ffmpeg, args, { timeout: 1800000, maxBuffer: 2 * 1024 * 1024 });
+    // Renders one stretch of a section in a single layout.
+    async function piece({
+      byRole,
+      primary,
+      aspect,
+      from,
+      d,
+      zooms,
+      preset,
+      withVideo = true,
+      withAudio = true,
+      crf = 21,
+      out,
+    }) {
+      const args = ["-hide_banner", "-loglevel", "error", "-nostdin", "-y"];
+      let index = 0;
+      const input = (asset) => {
+        args.push(
+          "-ss",
+          String(from),
+          "-t",
+          String(d),
+          "-i",
+          media(asset.filename),
+        );
+        return index++;
+      };
+      const still = (file) => {
+        args.push(
+          "-loop",
+          "1",
+          "-framerate",
+          "30",
+          "-t",
+          String(d),
+          "-i",
+          file,
+        );
+        return index++;
+      };
+      const graph = [];
+      const maps = [];
+      const cameraAsset = byRole.screen && byRole.camera ? byRole.camera : null;
+      if (withVideo) {
+        const plan = planLayout(l, preset, aspect, Boolean(cameraAsset));
+        const onBackground = [
+          plan.screen,
+          plan.preset === "pip" ? null : plan.camera,
+        ].filter(Boolean);
+        const bg = still(
+          await art.background(
+            `${plan.preset}:${aspect.toFixed(4)}`,
+            onBackground,
+          ),
+        );
+        graph.push(
+          `[${bg}:v]fps=30,format=rgb24,setsar=1,trim=duration=${d}[bg]`,
+        );
+        let last = "bg";
+        const rounded = async (label, box) => {
+          if (!(box.r > 0)) return label;
+          const m = still(await art.mask(box));
+          graph.push(
+            `[${label}]format=rgba[${label}c]`,
+            `[${m}:v]fps=30,format=gray[${label}m]`,
+            `[${label}c][${label}m]alphamerge[${label}r]`,
+          );
+          return `${label}r`;
+        };
+        if (plan.screen) {
+          const b = plan.screen,
+            pi = input(primary),
+            zoom = zoomFilter(zooms, b.w, b.h);
+          graph.push(
+            `[${pi}:v]setpts=PTS-STARTPTS,scale=${b.w}:${b.h},setsar=1,fps=30,tpad=stop_mode=clone:stop_duration=${d},trim=duration=${d}${zoom ? `,${zoom}` : ""}[scr]`,
+          );
+          const label = await rounded("scr", b);
+          graph.push(
+            `[${last}][${label}]overlay=${b.x}:${b.y}:shortest=1[withscreen]`,
+          );
+          last = "withscreen";
+        }
+        if (plan.camera) {
+          const b = plan.camera,
+            ci = input(cameraAsset);
+          if (plan.preset === "pip" && art.hasShadow) {
+            const sh = still(await art.shadow(b));
+            graph.push(
+              `[${last}][${sh}:v]overlay=${b.x - art.margin}:${b.y - art.margin + Math.round(art.margin / 5)}:shortest=1[withshadow]`,
+            );
+            last = "withshadow";
+          }
+          graph.push(
+            `[${ci}:v]setpts=PTS-STARTPTS,scale=${b.w}:${b.h}:force_original_aspect_ratio=increase,crop=${b.w}:${b.h},setsar=1,fps=30,tpad=stop_mode=clone:stop_duration=${d},trim=duration=${d}[cam]`,
+          );
+          const label = await rounded("cam", b);
+          graph.push(
+            `[${last}][${label}]overlay=${b.x}:${b.y}:shortest=1[withcamera]`,
+          );
+          last = "withcamera";
+        }
+        graph.push(`[${last}]format=yuv420p[video]`);
+        maps.push("-map", "[video]");
+      }
+      if (withAudio) {
+        const audio = [];
+        if (byRole.microphone && l.audio.microphone > 0)
+          audio.push({
+            index: input(byRole.microphone),
+            gain: l.audio.microphone,
+          });
+        if (byRole.system && l.audio.system > 0)
+          audio.push({ index: input(byRole.system), gain: l.audio.system });
+        if (
+          !audio.length &&
+          (await info(primary)).hasAudio &&
+          l.audio.microphone > 0
+        )
+          audio.push({ index: input(primary), gain: l.audio.microphone });
+        if (audio.length) {
+          audio.forEach((a, i) =>
+            graph.push(
+              `[${a.index}:a]asetpts=PTS-STARTPTS,aresample=48000,volume=${a.gain}${l.audio.denoise ? ",afftdn=nf=-25" : ""},apad,atrim=duration=${d}[a${i}]`,
+            ),
+          );
+          graph.push(
+            `${audio.map((_, i) => `[a${i}]`).join("")}amix=inputs=${audio.length}:normalize=0${l.audio.normalize ? ",loudnorm=I=-16:TP=-1.5:LRA=11" : ""},aresample=48000,apad,atrim=duration=${d}[audio]`,
+          );
+        } else
+          graph.push(`anullsrc=r=48000:cl=stereo,atrim=duration=${d}[audio]`);
+        maps.push("-map", "[audio]");
+      }
+      args.push("-filter_complex", graph.join(";"), ...maps, "-t", String(d));
+      if (withVideo) args.push(...encode(crf));
+      if (withAudio) args.push("-c:a", "aac", "-ar", "48000", "-ac", "2");
+      args.push(out);
+      await exec(args);
+      return out;
+    }
     try {
       const parts = [];
       let offset = 0;
@@ -98,108 +281,94 @@ export function createRenderer({ db, dataDir, find }) {
         const primary = byRole.screen || byRole.primary || byRole.camera;
         if (!primary) throw problem(400, "A source recording is missing.");
         const d = s.end - s.start,
-          args = ["-hide_banner", "-loglevel", "error", "-nostdin", "-y"];
-        let index = 0;
-        const inputs = [];
-        const input = (asset, role) => {
+          shape = await info(primary),
+          aspect = (shape.width || 16) / (shape.height || 9),
+          target = path.join(temp, `segment-${n}.mp4`);
+        // Zooms act on the screen layer only, so the camera stays put.
+        const zoomsFor = (local, length) =>
+          (project.overlays || [])
+            .filter((o) => o.type === "zoom")
+            .map((o) => ({
+              ...o,
+              start: o.start - offset - local,
+              end: o.end - offset - local,
+            }))
+            .filter((o) => o.end > 0 && o.start < length);
+        const pieces = layoutPieces(
+          project.scenes || [],
+          offset,
+          d,
+          l.preset || "pip",
+        );
+        const common = { byRole, primary, aspect };
+        if (pieces.length === 1)
+          await piece({
+            ...common,
+            from: s.start,
+            d,
+            zooms: zoomsFor(0, d),
+            preset: pieces[0].preset,
+            out: target,
+          });
+        else {
+          // Each layout overlaps the next briefly, then they are blended, so the
+          // picture glides from one arrangement to the other.
+          const blend = Math.min(
+            0.45,
+            ...pieces.map((p) => (p.end - p.start) / 2),
+          );
+          const files = [];
+          for (let i = 0; i < pieces.length; i++) {
+            const p = pieces[i],
+              length = p.end - p.start + (i < pieces.length - 1 ? blend : 0);
+            files.push(
+              await piece({
+                ...common,
+                from: s.start + p.start,
+                d: length,
+                zooms: zoomsFor(p.start, length),
+                preset: p.preset,
+                withAudio: false,
+                crf: 16,
+                out: path.join(temp, `segment-${n}-${i}.mp4`),
+              }),
+            );
+          }
+          const sound = await piece({
+            ...common,
+            from: s.start,
+            d,
+            withVideo: false,
+            out: path.join(temp, `segment-${n}.m4a`),
+          });
+          const args = ["-hide_banner", "-loglevel", "error", "-nostdin", "-y"];
+          for (const f of files) args.push("-i", f);
+          args.push("-i", sound);
+          const graph = files.map((_, i) => `[${i}:v]settb=AVTB,fps=30[p${i}]`);
+          let last = "p0";
+          for (let i = 1; i < files.length; i++) {
+            graph.push(
+              `[${last}][p${i}]xfade=transition=fade:duration=${blend.toFixed(3)}:offset=${pieces[i].start.toFixed(3)}[x${i}]`,
+            );
+            last = `x${i}`;
+          }
           args.push(
-            "-ss",
-            String(s.start),
+            "-filter_complex",
+            graph.join(";"),
+            "-map",
+            `[${last}]`,
+            "-map",
+            `${files.length}:a`,
             "-t",
             String(d),
-            "-i",
-            media(asset.filename),
+            ...encode(21),
+            "-c:a",
+            "copy",
+            target,
           );
-          const item = { index: index++, asset, role };
-          inputs.push(item);
-          return item.index;
-        };
-        const pi = input(primary, "primary");
-        const camera =
-          byRole.screen && byRole.camera && l.camera.visible
-            ? input(byRole.camera, "camera")
-            : null;
-        const audio = [];
-        if (byRole.microphone && l.audio.microphone > 0)
-          audio.push({
-            index: input(byRole.microphone, "microphone"),
-            gain: l.audio.microphone,
-          });
-        if (byRole.system && l.audio.system > 0)
-          audio.push({
-            index: input(byRole.system, "system"),
-            gain: l.audio.system,
-          });
-        if (
-          !audio.length &&
-          (await info(primary)).hasAudio &&
-          l.audio.microphone > 0
-        )
-          audio.push({ index: pi, gain: l.audio.microphone });
-        // Zooms act on the screen layer only, so the camera bubble stays put.
-        const zooms = (project.overlays || [])
-          .filter((o) => o.type === "zoom")
-          .map((o) => ({ ...o, start: o.start - offset, end: o.end - offset }))
-          .filter((o) => o.end > 0 && o.start < d);
-        const zoom = zoomFilter(zooms, innerW, innerH);
-        offset += d;
-        let filter = `[${pi}:v]setpts=PTS-STARTPTS,scale=${innerW}:${innerH}:force_original_aspect_ratio=decrease,pad=${innerW}:${innerH}:(ow-iw)/2:(oh-ih)/2:color=${color},setsar=1,fps=30,tpad=stop_mode=clone:stop_duration=${d},trim=duration=${d}${zoom ? `,${zoom}` : ""}[screen];color=c=${color}:s=${W}x${H}:r=30:d=${d}[background];[background][screen]overlay=${pad}:${pad}:shortest=1[base]`;
-        let visual = "base";
-        if (camera !== null) {
-          const cw = Math.max(32, Math.round((W * l.camera.size) / 2) * 2),
-            ch =
-              l.camera.shape === "portrait"
-                ? Math.round((cw * 1.35) / 2) * 2
-                : cw,
-            x = Math.min(W - cw, Math.max(0, Math.round(W * l.camera.x))),
-            y = Math.min(H - ch, Math.max(0, Math.round(H * l.camera.y)));
-          filter += `;[${camera}:v]setpts=PTS-STARTPTS,scale=${cw}:${ch}:force_original_aspect_ratio=increase,crop=${cw}:${ch},tpad=stop_mode=clone:stop_duration=${d},trim=duration=${d},format=rgba`;
-          if (l.camera.shape === "circle")
-            filter += `,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lte(pow(X-W/2,2)+pow(Y-H/2,2),pow(W/2,2)),255,0)'`;
-          filter += `[camera];[base][camera]overlay=${x}:${y}:shortest=1[composite]`;
-          visual = "composite";
+          await exec(args);
         }
-        if (audio.length) {
-          audio.forEach((a, i) => {
-            filter += `;[${a.index}:a]asetpts=PTS-STARTPTS,aresample=48000,volume=${a.gain}${l.audio.denoise ? ",afftdn=nf=-25" : ""},apad,atrim=duration=${d}[a${i}]`;
-          });
-          filter += `;${audio.map((_, i) => `[a${i}]`).join("")}amix=inputs=${audio.length}:normalize=0${l.audio.normalize ? ",loudnorm=I=-16:TP=-1.5:LRA=11" : ""},aresample=48000,apad,atrim=duration=${d}[audio]`;
-        } else
-          filter += `;anullsrc=r=48000:cl=stereo,atrim=duration=${d}[audio]`;
-        const script = path.join(temp, `segment-${n}.filter`);
-        writeFileSync(script, filter);
-        const target = path.join(temp, `segment-${n}.mp4`);
-        args.push(
-          "-filter_complex",
-          readFileSync(script, "utf8"),
-          "-map",
-          `[${visual}]`,
-          "-map",
-          "[audio]",
-          "-t",
-          String(d),
-          "-c:v",
-          "libx264",
-          "-preset",
-          "veryfast",
-          "-crf",
-          "21",
-          "-pix_fmt",
-          "yuv420p",
-          "-c:a",
-          "aac",
-          "-ar",
-          "48000",
-          "-ac",
-          "2",
-          "-threads",
-          "2",
-          target,
-        );
-        await run(ffmpeg, args, {
-          timeout: 1800000,
-          maxBuffer: 2 * 1024 * 1024,
-        });
+        offset += d;
         parts.push(target);
         progress(5 + ((n + 1) / project.segments.length) * 65);
       }

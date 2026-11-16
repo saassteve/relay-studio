@@ -326,6 +326,14 @@ export function registerRecordings({
         180,
         Math.round((sourceHeight * scale) / 2) * 2,
       );
+      // Screen recordings are framed on a wallpaper by default.
+      if (assets.some((x) => x.role === "screen"))
+        Object.assign(project.layout, {
+          wallpaper: "aurora",
+          padding: Math.round((project.layout.width * 0.045) / 2) * 2,
+          radius: 0.012,
+          shadow: 0.7,
+        });
       if (meta.layout)
         project.layout = {
           ...project.layout,
