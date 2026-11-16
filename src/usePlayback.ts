@@ -12,54 +12,58 @@ export function usePlayback(
     const src = token
       ? `/api/share/${token}/stream/master.m3u8`
       : `/api/videos/${clip.id}/stream/master.m3u8`;
-    if (video.canPlayType("application/vnd.apple.mpegurl")) {
-      video.src = src;
-      return;
-    }
-    if (Hls.isSupported()) {
-      const hls = new Hls({ maxBufferLength: 20 });
-      let fellBack = false,
-        last = -1,
+    // Prefer hls.js wherever Media Source Extensions exist. Chrome's newer built-in
+    // HLS can stall early on these renditions; native HLS is kept for browsers
+    // without MSE (older iPhones).
+    const useHls = Hls.isSupported();
+    if (!useHls && !video.canPlayType("application/vnd.apple.mpegurl")) return;
+    const hls = useHls ? new Hls({ maxBufferLength: 20 }) : null;
+    let fellBack = false,
+      last = -1,
+      stuck = 0;
+    // If adaptive playback stops advancing, continue from the same point on the MP4.
+    const fallback = () => {
+      if (fellBack) return;
+      fellBack = true;
+      clearInterval(watchdog);
+      const at = video.currentTime,
+        playing = !video.paused;
+      hls?.destroy();
+      video.src = mediaURL(clip, token);
+      video.addEventListener(
+        "loadedmetadata",
+        () => {
+          video.currentTime = at;
+          if (playing) void video.play().catch(() => {});
+        },
+        { once: true },
+      );
+    };
+    const watchdog = setInterval(() => {
+      if (video.paused || video.ended || video.seeking) {
         stuck = 0;
-      // hls.js can stall on a buffer gap without raising a fatal error.
-      // If playback stops advancing, continue from the same point on the MP4.
-      const fallback = () => {
-        if (fellBack) return;
-        fellBack = true;
-        clearInterval(watchdog);
-        const at = video.currentTime,
-          playing = !video.paused;
-        hls.destroy();
-        video.src = mediaURL(clip, token);
-        video.addEventListener(
-          "loadedmetadata",
-          () => {
-            video.currentTime = at;
-            if (playing) void video.play().catch(() => {});
-          },
-          { once: true },
-        );
-      };
-      const watchdog = setInterval(() => {
-        if (video.paused || video.ended || video.seeking) {
-          stuck = 0;
-          last = video.currentTime;
-          return;
-        }
-        stuck = video.currentTime === last ? stuck + 1 : 0;
         last = video.currentTime;
-        if (stuck >= 3) fallback();
-      }, 1000);
+        return;
+      }
+      stuck = video.currentTime === last ? stuck + 1 : 0;
+      last = video.currentTime;
+      if (stuck >= 3) fallback();
+    }, 1000);
+    if (hls) {
       hls.loadSource(src);
       hls.attachMedia(video);
       hls.on(Hls.Events.ERROR, (_e, d) => {
         if (d.fatal) fallback();
       });
-      return () => {
-        clearInterval(watchdog);
-        if (!fellBack) hls.destroy();
-      };
+    } else {
+      video.src = src;
+      video.addEventListener("error", fallback, { once: true });
     }
+    return () => {
+      clearInterval(watchdog);
+      video.removeEventListener("error", fallback);
+      if (!fellBack) hls?.destroy();
+    };
   }, [clip.id, clip.revision, clip.streamReady, token]);
   useEffect(() => {
     if (!token) return;
