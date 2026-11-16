@@ -1,39 +1,50 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { MoreHorizontal, X } from "lucide-react";
 
 const FOCUSABLE =
   'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
-let open = 0;
+// Open dialogs, oldest first. Only the last one answers the keyboard.
+const dialogs: HTMLElement[] = [];
 
 // Keeps keyboard focus inside a dialog, closes it on Escape and returns focus to
-// whatever opened it. The rest of the page is inert while a dialog is up.
+// whatever opened it. The app behind is inert while a dialog is up. Dialogs can
+// stack (a question asked from inside another dialog): the top one has the keyboard.
 export function useDialog(
   ref: React.RefObject<HTMLElement | null>,
   onClose?: () => void,
+  // What to return focus to, when the caller knows better than "what has focus now".
+  from?: HTMLElement | null,
 ) {
   const close = useRef(onClose);
   close.current = onClose;
+  // Read on the first render: by the time effects run, a control inside the
+  // dialog that asks for focus has already taken it.
+  const [opener] = useState(
+    () => from ?? (document.activeElement as HTMLElement | null),
+  );
   useEffect(() => {
     const node = ref.current;
     if (!node) return;
-    const opener = document.activeElement as HTMLElement | null;
     const root = document.getElementById("root");
-    open += 1;
+    dialogs.push(node);
     if (root && !root.contains(node)) root.inert = true;
     const focusables = () =>
       [...node.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
         (el) => el.offsetParent !== null || el === document.activeElement,
       );
-    // Start on the first real control, not the close button.
-    const first =
-      node.querySelector<HTMLElement>("[autofocus]") ||
-      focusables().find((el) => !el.classList.contains("dialog-close")) ||
-      node;
+    // Unless a control inside already took focus, start on the first real
+    // control, not the close button.
     if (!node.contains(document.activeElement))
-      first.focus({ preventScroll: true });
+      (
+        focusables().find((el) => !el.classList.contains("dialog-close")) ||
+        node
+      ).focus({ preventScroll: true });
+    // Heard on the document, so the keys still work when focus has ended up
+    // outside the dialog (on the page, or in a dialog underneath).
     const key = (e: KeyboardEvent) => {
+      if (dialogs[dialogs.length - 1] !== node) return;
       if (e.key === "Escape" && close.current) {
         e.stopPropagation();
         close.current();
@@ -43,24 +54,23 @@ export function useDialog(
       const items = focusables();
       if (!items.length) return e.preventDefault();
       const start = items[0],
-        end = items[items.length - 1];
-      if (
-        e.shiftKey &&
-        (document.activeElement === start ||
-          !node.contains(document.activeElement))
-      ) {
+        end = items[items.length - 1],
+        active = document.activeElement,
+        outside = !node.contains(active);
+      // The dialog itself can hold focus; Shift+Tab from there must not leave it.
+      if (e.shiftKey && (active === start || active === node || outside)) {
         e.preventDefault();
         end.focus();
-      } else if (!e.shiftKey && document.activeElement === end) {
+      } else if (!e.shiftKey && (active === end || outside)) {
         e.preventDefault();
         start.focus();
       }
     };
-    node.addEventListener("keydown", key);
+    document.addEventListener("keydown", key);
     return () => {
-      node.removeEventListener("keydown", key);
-      open -= 1;
-      if (root && open === 0) root.inert = false;
+      document.removeEventListener("keydown", key);
+      dialogs.splice(dialogs.indexOf(node), 1);
+      if (root && !dialogs.some((d) => !root.contains(d))) root.inert = false;
       // If what opened this has gone (a menu item whose menu closed), go to its menu button.
       const back =
         opener?.isConnected && opener.offsetParent !== null
@@ -68,7 +78,7 @@ export function useDialog(
           : opener?.closest("details")?.querySelector<HTMLElement>("summary");
       back?.focus({ preventScroll: true });
     };
-  }, [ref]);
+  }, [ref, opener]);
 }
 
 export function Modal({
@@ -80,11 +90,14 @@ export function Modal({
   dismissOnBackdrop = true,
   describedBy,
   alert = false,
+  opener,
 }: {
   // Id of the text that says what this dialog is asking.
   describedBy?: string;
   // True for questions that need an answer before anything else.
   alert?: boolean;
+  // Where focus goes when this closes. Defaults to what had focus when it opened.
+  opener?: HTMLElement | null;
   label: string;
   onClose?: () => void;
   className?: string;
@@ -94,7 +107,7 @@ export function Modal({
 }) {
   const ref = useRef<HTMLElement>(null),
     pressed = useRef(false);
-  useDialog(ref, onClose);
+  useDialog(ref, onClose, opener);
   return createPortal(
     <div
       className="dialog-backdrop"
@@ -153,6 +166,8 @@ export function confirmDialog({
   cancel?: string;
   destructive?: boolean;
 }): Promise<boolean> {
+  // Noted now: this renders a moment later, and focus may have moved by then.
+  const opener = document.activeElement as HTMLElement | null;
   return new Promise((resolve) => {
     const host = document.createElement("div");
     document.body.append(host);
@@ -169,6 +184,7 @@ export function confirmDialog({
         onClose={() => done(false)}
         closeButton={false}
         alert
+        opener={opener}
         describedBy={body ? "confirm-body" : undefined}
       >
         <h2>{title}</h2>
@@ -204,16 +220,19 @@ export function radio(checked: boolean) {
     role: "radio" as const,
     "aria-checked": checked,
     tabIndex: checked ? 0 : -1,
-    // A group with nothing chosen yet is still reachable: its first option takes Tab.
+    // Exactly one option in a group takes Tab: the chosen one, or the first that
+    // can be used while nothing is chosen. Worked out for the whole group after
+    // every render, so a stop handed to the first option is taken back later.
     ref: (el: HTMLElement | null) => {
       const group = el?.closest('[role="radiogroup"]');
-      if (
-        el &&
-        group &&
-        !group.querySelector('[role="radio"][aria-checked="true"]') &&
-        group.querySelector('[role="radio"]') === el
-      )
-        el.tabIndex = 0;
+      if (!group) return;
+      const items = [
+        ...group.querySelectorAll<HTMLButtonElement>('[role="radio"]'),
+      ];
+      const stop =
+        items.find((item) => item.getAttribute("aria-checked") === "true") ||
+        items.find((item) => !item.disabled);
+      for (const item of items) item.tabIndex = item === stop ? 0 : -1;
     },
     onKeyDown: (e: React.KeyboardEvent<HTMLElement>) => {
       const step =
@@ -238,7 +257,7 @@ export function radio(checked: boolean) {
 }
 
 // A small pop-up menu behind a "more" button. It closes when you pick something,
-// click elsewhere or press Escape, and hands focus back to its button.
+// click or Tab elsewhere, or press Escape (which hands focus back to its button).
 export function Menu({
   label,
   className = "",
@@ -269,7 +288,16 @@ export function Menu({
     };
   }, []);
   return (
-    <details className={`more-menu ${className}`} ref={ref}>
+    <details
+      className={`more-menu ${className}`}
+      ref={ref}
+      // Tabbing out of the menu closes it, so it is never left open behind you.
+      onBlur={(e) => {
+        const menu = ref.current;
+        if (menu?.open && e.relatedTarget && !menu.contains(e.relatedTarget))
+          menu.open = false;
+      }}
+    >
       <summary className="icon-button" aria-label={label}>
         <MoreHorizontal size={18} />
       </summary>

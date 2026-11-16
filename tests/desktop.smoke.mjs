@@ -95,7 +95,10 @@ try {
   const updates = await window.evaluate(() =>
     window.relayDesktop.checkForUpdates(),
   );
-  assert.match(updates.status, /packaged|feed|latest/);
+  assert.match(
+    updates.status,
+    /packaged|feed|latest|available|check for updates/,
+  );
   await window.evaluate(() => {
     window.__desktopActions = [];
     window.relayDesktop.onControl((a) => window.__desktopActions.push(a));

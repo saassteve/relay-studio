@@ -219,6 +219,7 @@ export interface CameraPipeline {
   stream: MediaStream;
   setLook: (look: CameraLook) => void;
   stop: () => void;
+  // Settles once the chosen look can be drawn. Rejects if its background can't start.
   ready: Promise<void>;
 }
 export const isPlain = (look: CameraLook) =>
@@ -287,19 +288,28 @@ export async function createCameraPipeline(
       next.background && !["none", "blur"].includes(next.background)
         ? paintBackground(next.background, W, H)
         : null;
-    if (next.background && next.background !== "none" && !model)
-      loading = loadSegmenter()
-        .then((m) => {
+    if (!next.background || next.background === "none" || model)
+      loading = Promise.resolve();
+    else {
+      loading = loadSegmenter().then(
+        (m) => {
           model = m;
-        })
-        .catch(() => {
-          /* Fall back to the filter alone if segmentation can't start. */
-        });
+        },
+        () => {
+          throw new Error(
+            "Your camera background couldn’t start. Choose None or try again.",
+          );
+        },
+      );
+      // Callers that care read `ready`; the rest must not see an unhandled error.
+      loading.catch(() => {});
+    }
   };
   apply(initial);
 
   const segment = () => {
     if (!model) return;
+    hasMask = false;
     sctx.drawImage(video, 0, 0, small.width, small.height);
     const stamp = Math.max(lastStamp + 1, performance.now());
     lastStamp = stamp;
@@ -323,9 +333,15 @@ export async function createCameraPipeline(
     if (stopped) return;
     const css = filterCSS(look.filter);
     if (video.readyState >= 2) {
-      if (!look.background || look.background === "none" || !model) {
+      if (!look.background || look.background === "none") {
         ctx.filter = css;
         ctx.drawImage(video, 0, 0, W, H);
+      } else if (!model) {
+        // A background was asked for, so the room behind you is never shown, not
+        // even while the cut-out model is loading or after it has failed to load.
+        ctx.filter = "none";
+        ctx.fillStyle = "#173e32";
+        ctx.fillRect(0, 0, W, H);
       } else {
         try {
           segment();
@@ -352,23 +368,35 @@ export async function createCameraPipeline(
             ctx.fillRect(0, 0, W, H);
           }
         }
-        // Person, cut out by the feathered mask
-        pctx.globalCompositeOperation = "copy";
-        pctx.filter = css;
-        pctx.drawImage(video, 0, 0, W, H);
+        // Person, cut out by the feathered mask. Without a mask for this frame
+        // the person is left out, so the uncut camera never shows through.
         if (hasMask) {
+          pctx.globalCompositeOperation = "copy";
+          pctx.filter = css;
+          pctx.drawImage(video, 0, 0, W, H);
           pctx.globalCompositeOperation = "destination-in";
           pctx.filter = `blur(${Math.max(1, Math.round(W / 400))}px)`;
           pctx.drawImage(mask, 0, 0, W, H);
+          ctx.filter = "none";
+          ctx.drawImage(person, 0, 0);
         }
-        ctx.filter = "none";
-        ctx.drawImage(person, 0, 0);
       }
     }
   };
   draw();
   stopTicker = ticker(draw, fps);
   const stream = out.captureStream(fps);
+  // The canvas keeps producing frames after the camera has gone, so pass the
+  // camera's ending on to whoever is using the processed picture.
+  source.getVideoTracks()[0]?.addEventListener(
+    "ended",
+    () =>
+      stream.getVideoTracks().forEach((t) => {
+        t.stop();
+        t.dispatchEvent(new Event("ended"));
+      }),
+    { once: true },
+  );
   return {
     stream,
     setLook: apply,

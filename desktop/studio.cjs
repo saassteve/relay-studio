@@ -6,9 +6,38 @@ const {
   Notification,
   powerSaveBlocker,
   app,
+  dialog,
+  shell,
 } = require("electron");
 const path = require("node:path");
 const os = require("node:os");
+const { secure, lock, onAllSpaces } = require("./windows.cjs");
+
+const RELEASES = "https://github.com/saassteve/relay-studio/";
+const LATEST_RELEASE =
+  "https://api.github.com/repos/saassteve/relay-studio/releases/latest";
+const TOOLBAR_WIDTH = 420;
+const TOOLBAR_MARGIN = 24;
+
+// Dotted numeric versions: newer("0.10.0", "0.9.3") is true.
+function newer(a, b) {
+  const x = a.split("."),
+    y = b.split(".");
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (Number(x[i]) || 0) - (Number(y[i]) || 0);
+    if (d) return d > 0;
+  }
+  return false;
+}
+// Only Relay's own release pages are ever opened in the browser.
+function releasePage(url) {
+  try {
+    const href = new URL(url).href;
+    return href.startsWith(RELEASES) ? href : "";
+  } catch {
+    return "";
+  }
+}
 
 // Auxiliary windows have a dedicated, restricted preload. They never load remote content.
 module.exports = function attachStudio({
@@ -36,34 +65,32 @@ module.exports = function attachStudio({
       powerSaveBlocker.stop(blocker);
     blocker = undefined;
   };
-  const secure = {
-    preload: path.join(__dirname, "controls-preload.cjs"),
-    contextIsolation: true,
-    nodeIntegration: false,
-    sandbox: true,
-  };
+  const webPreferences = secure("controls-preload.cjs");
   function openToolbar() {
     const display = screen.getDisplayNearestPoint(
       screen.getCursorScreenPoint(),
     );
     toolbar = new BrowserWindow({
-      width: 420,
+      width: TOOLBAR_WIDTH,
       height: 205,
-      x: display.workArea.x + display.workArea.width - 400,
-      y: display.workArea.y + 24,
+      x:
+        display.workArea.x +
+        display.workArea.width -
+        TOOLBAR_WIDTH -
+        TOOLBAR_MARGIN,
+      y: display.workArea.y + TOOLBAR_MARGIN,
       frame: false,
       alwaysOnTop: true,
       skipTaskbar: true,
       resizable: false,
       show: false,
       backgroundColor: "#20281d",
-      webPreferences: secure,
+      webPreferences,
     });
     toolbar.setAlwaysOnTop(true, "screen-saver", 3);
     toolbar.setContentProtection(true);
-    toolbar.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-    toolbar.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-    toolbar.webContents.on("will-navigate", (e) => e.preventDefault());
+    onAllSpaces(toolbar);
+    lock(toolbar);
     void toolbar.loadFile(path.join(__dirname, "controls.html")).then(() => {
       toolbar?.webContents.send("relay:state", { ...state, ...extras });
       toolbar?.showInactive();
@@ -139,8 +166,9 @@ module.exports = function attachStudio({
         hasShadow: false,
         // Cover the whole display, menu bar included, so fractions match the capture.
         enableLargerThanScreen: true,
-        webPreferences: secure,
+        webPreferences,
       });
+      lock(regionWindow);
       regionWindow.setAlwaysOnTop(true, "screen-saver");
       regionWindow.setBounds(bounds);
       regionWindow.setContentProtection(true);
@@ -193,20 +221,15 @@ module.exports = function attachStudio({
         body: String(message).slice(0, 250),
       }).show();
   });
-  ipcMain.handle("relay:updates", async (event) => {
-    if (!trusted(event)) throw new Error("Untrusted request");
-    if (!app.isPackaged)
-      return { status: "Updates are available in packaged releases." };
-    const feed = process.env.RELAY_UPDATE_URL;
-    if (!feed || !feed.startsWith("https://"))
-      return { status: "Set RELAY_UPDATE_URL to your HTTPS release feed." };
+  // Copies built with their own release feed update themselves from it.
+  async function updateFromFeed(feed) {
     const { autoUpdater } = require("electron-updater");
     autoUpdater.autoDownload = false;
     autoUpdater.setFeedURL({ provider: "generic", url: feed });
     const result = await autoUpdater.checkForUpdates();
     if (!result || result.updateInfo.version === app.getVersion())
       return { status: "You have the latest release." };
-    const answer = await require("electron").dialog.showMessageBox(window(), {
+    const answer = await dialog.showMessageBox(window(), {
       type: "info",
       message: `Relay ${result.updateInfo.version} is available.`,
       detail: "Download the signed update and install it when Relay quits?",
@@ -218,6 +241,53 @@ module.exports = function attachStudio({
     await autoUpdater.downloadUpdate();
     autoUpdater.autoInstallOnAppQuit = true;
     return { status: "Update downloaded. Quit Relay to install it." };
+  }
+  ipcMain.handle("relay:updates", async (event) => {
+    if (!trusted(event)) throw new Error("Untrusted request");
+    if (!app.isPackaged)
+      return { status: "Updates are available in packaged releases." };
+    const feed = process.env.RELAY_UPDATE_URL;
+    if (feed?.startsWith("https://")) return updateFromFeed(feed);
+    // Official builds have no update feed: compare with the latest GitHub release
+    // and point to its download page.
+    const current = app.getVersion();
+    let release, latest;
+    try {
+      const response = await fetch(LATEST_RELEASE, {
+        headers: {
+          "User-Agent": "Relay",
+          Accept: "application/vnd.github+json",
+        },
+        redirect: "error",
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!response.ok) throw new Error(`GitHub answered ${response.status}.`);
+      release = await response.json();
+      latest = String(release.tag_name).replace(/^v/, "");
+      if (!/^\d+(\.\d+)*$/.test(latest))
+        throw new Error("Unreadable release version.");
+    } catch (error) {
+      console.error(error);
+      return {
+        status:
+          "Couldn’t check for updates. Check your connection and try again.",
+      };
+    }
+    if (!newer(latest, current))
+      return { status: `You have the latest version (${current}).` };
+    const status = `Relay ${latest} is available.`;
+    const url = releasePage(release.html_url);
+    if (!url) return { status };
+    const answer = await dialog.showMessageBox(window(), {
+      type: "info",
+      message: status,
+      detail: `You have ${current}. The new version is on Relay’s download page; your library stays as it is.`,
+      buttons: ["Open download page", "Later"],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (answer.response === 0) void shell.openExternal(url);
+    return { status, url };
   });
   app.on("before-quit", () => {
     regionWindow?.destroy();
@@ -232,6 +302,8 @@ module.exports = function attachStudio({
       const wasActive = state.active;
       state = { active: false };
       extras = {};
+      // Whoever asked for a region is gone, so its picker closes with no selection.
+      regionWindow?.destroy();
       onState(state);
       onActive(false);
       if (wasActive) dispose();
@@ -242,6 +314,5 @@ module.exports = function attachStudio({
     },
     state: () => state,
     send,
-    dispose,
   };
 };

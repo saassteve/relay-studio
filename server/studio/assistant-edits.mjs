@@ -1,7 +1,8 @@
 // A small, safe vocabulary of edits that an AI assistant can apply to a project.
 // Used by the MCP connector (Claude, ChatGPT and other clients) and by Relay's
-// own AI features. Every change goes through validateProject and is saved as
-// an undoable revision.
+// own AI features. A batch is checked as a whole before anything is kept. Edits
+// to the project are saved as one step the user can undo; a new title or
+// description is saved with them, but is not part of that undo.
 import { randomUUID } from "node:crypto";
 import { parseJSON, problem } from "./schema.mjs";
 import { captionCues, cutRanges, getProject, outputWords } from "./project.mjs";
@@ -129,7 +130,8 @@ export function createAssistantEdits({
     const total = duration(project);
     const applied = [];
 
-    // 1. Cuts, all measured on the timeline as it is now.
+    // 1. Everything that removes footage: cuts, measured on the timeline as it
+    // is now, and the pauses or filler words found in the recordings.
     const cuts = operations
       .filter((o) => o.op === "cut")
       .map((o) => {
@@ -138,43 +140,82 @@ export function createAssistantEdits({
         if (end - start < 0.1)
           throw problem(400, "A cut must be at least 0.1 seconds.");
         return { start, end: Math.min(end, total) };
-      })
-      .sort((a, b) => a.start - b.start);
-    // Where a moment on the old timeline lands after the cuts.
-    const remap = (t) => {
-      let removed = 0;
-      for (const c of cuts) {
-        if (t >= c.end) removed += c.end - c.start;
-        else if (t > c.start) removed += t - c.start;
-      }
-      return Math.max(0, t - removed);
+      });
+    const bySource = new Map();
+    const from = (sourceId, range) => {
+      if (!bySource.has(sourceId)) bySource.set(sourceId, []);
+      bySource.get(sourceId).push(range);
     };
-    if (cuts.length) {
-      const bySource = new Map();
-      let offset = 0;
-      for (const s of project.segments) {
-        const length = s.end - s.start;
-        for (const c of cuts) {
-          const a = Math.max(c.start, offset),
-            b = Math.min(c.end, offset + length);
-          if (b - a > 0.001) {
-            if (!bySource.has(s.sourceId)) bySource.set(s.sourceId, []);
-            bySource
-              .get(s.sourceId)
-              .push({ start: s.start + a - offset, end: s.start + b - offset });
-          }
-        }
-        offset += length;
+    // The stretches of the timeline that go, for placing what is added below.
+    const gone = [...cuts];
+    let offset = 0;
+    for (const s of project.segments) {
+      const length = s.end - s.start;
+      for (const c of cuts) {
+        const a = Math.max(c.start, offset),
+          b = Math.min(c.end, offset + length);
+        if (b - a > 0.001)
+          from(s.sourceId, {
+            start: s.start + a - offset,
+            end: s.start + b - offset,
+          });
       }
-      for (const [sourceId, ranges] of bySource)
-        project = cutRanges(project, sourceId, ranges);
-      // cutRanges keeps existing effects and layout changes lined up with what
-      // they pointed at.
-      project.scenes ||= [];
+      offset += length;
+    }
+    if (cuts.length)
       applied.push(
         `cut ${cuts.length} stretch${cuts.length === 1 ? "" : "es"} (${round(cuts.reduce((n, c) => n + c.end - c.start, 0))}s)`,
       );
+    const kinds = new Set(
+      operations.flatMap((o) =>
+        o.op === "remove_fillers"
+          ? ["filler"]
+          : o.op === "remove_silences"
+            ? ["silence"]
+            : [],
+      ),
+    );
+    if (kinds.size) {
+      const found = (await suggestions(v.id)).filter((s) => kinds.has(s.kind));
+      for (const f of found) {
+        from(f.sourceId, { start: f.start, end: f.end });
+        let at = 0;
+        for (const s of project.segments) {
+          const a = Math.max(f.start, s.start),
+            b = Math.min(f.end, s.end);
+          if (s.sourceId === f.sourceId && b > a)
+            gone.push({ start: at + a - s.start, end: at + b - s.start });
+          at += s.end - s.start;
+        }
+      }
+      for (const kind of kinds) {
+        const count = found.filter((f) => f.kind === kind).length;
+        applied.push(
+          `removed ${count} ${kind === "filler" ? "filler word" : "pause"}${count === 1 ? "" : "s"}`,
+        );
+      }
     }
+    // cutRanges moves the effects and layout changes already on the video with
+    // the footage they point at.
+    for (const [sourceId, ranges] of bySource)
+      project = cutRanges(project, sourceId, ranges);
+    project.scenes ||= [];
+    // Where a moment on the old timeline lands once all of that is gone. Only
+    // what this batch adds needs it.
+    const removed = [];
+    for (const g of gone.sort((a, b) => a.start - b.start)) {
+      const last = removed.at(-1);
+      if (last && g.start <= last.end) last.end = Math.max(last.end, g.end);
+      else removed.push({ ...g });
+    }
+    const remap = (t) => {
+      let before = 0;
+      for (const r of removed) {
+        if (t >= r.end) before += r.end - r.start;
+        else if (t > r.start) before += t - r.start;
+      }
+      return Math.max(0, t - before);
+    };
     const after = () => duration(project);
     const span = (o, minimum) => {
       const start = remap(num(o.start, 0, total, "start")),
@@ -188,22 +229,9 @@ export function createAssistantEdits({
     };
 
     // 2. Everything else, in the order given.
+    let details;
     for (const o of operations) {
-      if (o.op === "cut") continue;
-      if (o.op === "remove_fillers" || o.op === "remove_silences") {
-        const kind = o.op === "remove_fillers" ? "filler" : "silence";
-        const found = (await suggestions(v.id)).filter((s) => s.kind === kind);
-        const bySource = new Map();
-        for (const s of found) {
-          if (!bySource.has(s.sourceId)) bySource.set(s.sourceId, []);
-          bySource.get(s.sourceId).push({ start: s.start, end: s.end });
-        }
-        for (const [sourceId, ranges] of bySource)
-          project = cutRanges(project, sourceId, ranges);
-        applied.push(
-          `removed ${found.length} ${kind === "filler" ? "filler word" : "pause"}${found.length === 1 ? "" : "s"}`,
-        );
-      } else if (o.op === "add_title") {
+      if (o.op === "add_title") {
         const style = TITLE_TYPES.includes(o.style) ? o.style : "title";
         const title = String(o.title || "")
           .trim()
@@ -311,30 +339,28 @@ export function createAssistantEdits({
       } else if (o.op === "set_details") {
         const title =
             o.title === undefined
-              ? v.title
+              ? (details?.title ?? v.title)
               : String(o.title).trim().slice(0, 160),
           description =
             o.description === undefined
-              ? v.description
+              ? (details?.description ?? v.description)
               : String(o.description).slice(0, 20000);
         if (!title) throw problem(400, "The title can't be empty.");
-        db.prepare("UPDATE videos SET title=?,description=? WHERE id=?").run(
-          title,
-          description,
-          v.id,
-        );
+        details = { title, description };
         applied.push("updated the title and description");
       }
     }
-    // Removing words can shorten the video; keep everything inside it.
-    const length = after();
-    const inside = (minimum) => (item) => {
-      item.end = Math.min(item.end, round(length));
-      return item.end - item.start >= minimum;
-    };
-    project.overlays = project.overlays.filter(inside(0.3)).slice(0, 60);
-    project.scenes = project.scenes.filter(inside(0.5)).slice(0, 40);
+    // validateProject fits or drops anything left hanging past the end.
+    project.overlays = project.overlays.slice(0, 60);
+    project.scenes = project.scenes.slice(0, 40);
     save(find(v.id), validateProject(project, sourceFind));
+    // Only a batch that was valid as a whole renames the video.
+    if (details)
+      db.prepare("UPDATE videos SET title=?,description=? WHERE id=?").run(
+        details.title,
+        details.description,
+        v.id,
+      );
     return { applied, video: describe(find(v.id)) };
   }
   return { describe, apply };

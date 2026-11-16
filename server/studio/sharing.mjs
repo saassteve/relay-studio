@@ -1,14 +1,15 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import path from "node:path";
 import { existsSync } from "node:fs";
-import { parseJSON, problem, mediaHeaders, downloadName } from "./schema.mjs";
-import { passwordHash, passwordMatches } from "./auth.mjs";
 import {
-  captions,
-  outputWords,
-  getProject,
-  publishedProject,
-} from "./project.mjs";
+  parseJSON,
+  problem,
+  mediaHeaders,
+  downloadName,
+  sendMedia,
+} from "./schema.mjs";
+import { passwordHash, passwordMatches } from "./auth.mjs";
+import { captions, outputWords, publishedProject } from "./project.mjs";
 const cookie = (req, name) =>
   req.headers.cookie
     ?.split(";")
@@ -22,6 +23,7 @@ export function registerSharing({
   owner,
   admin,
   rateLimit,
+  limiter,
   find,
   serialize,
 }) {
@@ -47,12 +49,13 @@ export function registerSharing({
       throw problem(401, "Sign in to this workspace to watch this video.", {
         details: { requiresLogin: true },
       });
-    if (c.access === "invited" && !invited && member?.role !== "owner")
-      throw problem(
-        401,
-        "This video is restricted to invited workspace members.",
-        { details: { requiresLogin: true } },
-      );
+    if (c.access === "invited" && !invited && member?.role !== "owner") {
+      const message = "This video is restricted to invited workspace members.";
+      // Someone already signed in can't fix this by signing in again.
+      throw member
+        ? problem(403, message)
+        : problem(401, message, { details: { requiresLogin: true } });
+    }
     if (c.passwordHash && member?.role !== "owner") {
       const grant = cookie(req, `relay_view_${v.token}`);
       const valid =
@@ -151,6 +154,19 @@ export function registerSharing({
         throw problem(400, "Use a video password of at least six characters.");
       c.passwordHash = b.password ? passwordHash(String(b.password)) : null;
     }
+    // Where the owner has turned public links off, only the owner may loosen one.
+    const until = (value) => (value ? Date.parse(value) : Infinity);
+    if (
+      policy().publicLinks === false &&
+      req.user?.role !== "owner" &&
+      ((c.access === "link" && previous.access !== "link") ||
+        (previous.passwordHash && !c.passwordHash) ||
+        until(c.expiresAt) > until(previous.expiresAt))
+    )
+      throw problem(
+        403,
+        "Public sharing is disabled by your workspace owner, so this link can’t be opened up further.",
+      );
     db.prepare("UPDATE videos SET share_config=? WHERE id=?").run(
       JSON.stringify(c),
       v.id,
@@ -198,14 +214,14 @@ export function registerSharing({
     guard(req, v);
     res.json(shareData(v));
   });
-  app.get("/api/share/:token/media", (req, res) => {
+  app.get("/api/share/:token/media", (req, res, next) => {
     const v = byToken(req.params.token),
       c = guard(req, v);
     if (req.query.download && c.download === false)
       throw problem(403, "The owner has disabled downloads.");
     mediaHeaders(res, v.mime);
     if (req.query.download) res.attachment(downloadName(v));
-    res.sendFile(v.filename, { root: path.join(dataDir, "media") });
+    sendMedia(res, v.filename, path.join(dataDir, "media"), next);
   });
   app.get("/api/share/:token/captions.:format", (req, res) => {
     const v = byToken(req.params.token);
@@ -218,7 +234,7 @@ export function registerSharing({
         captions(outputWords(publishedProject(v), find), req.params.format),
       );
   });
-  const stream = (req, res, v) => {
+  const stream = (req, res, next, v) => {
     const file = req.params.file;
     if (!/^(master|\d+p)\.m3u8$|^\d+p_\d+\.ts$/.test(file))
       throw problem(404, "Stream segment not found.");
@@ -229,15 +245,15 @@ export function registerSharing({
     res.type(
       file.endsWith(".m3u8") ? "application/vnd.apple.mpegurl" : "video/mp2t",
     );
-    res.sendFile(file, { root });
+    sendMedia(res, file, root, next);
   };
-  app.get("/api/share/:token/stream/:file", (req, res) => {
+  app.get("/api/share/:token/stream/:file", (req, res, next) => {
     const v = byToken(req.params.token);
     guard(req, v);
-    stream(req, res, v);
+    stream(req, res, next, v);
   });
-  app.get("/api/videos/:id/stream/:file", owner, (req, res) =>
-    stream(req, res, find(req.params.id)),
+  app.get("/api/videos/:id/stream/:file", owner, (req, res, next) =>
+    stream(req, res, next, find(req.params.id)),
   );
   app.post("/api/share/:token/view", rateLimit, (req, res) => {
     const v = byToken(req.params.token);
@@ -255,12 +271,23 @@ export function registerSharing({
     }
     return result;
   };
-  app.post("/api/share/:token/events", rateLimit, (req, res) => {
+  // The player reports every few seconds, and an office of viewers can share one
+  // address, so each viewing session is counted on its own under a roomy cap for
+  // the address as a whole.
+  const eventLimits = [
+    limiter(600),
+    limiter(
+      60,
+      (req) => `${req.ip} ${String(req.body.sessionId).slice(0, 80)}`,
+    ),
+  ];
+  app.post("/api/share/:token/events", ...eventLimits, (req, res) => {
     const v = byToken(req.params.token);
     guard(req, v);
     const b = req.body;
     if (
-      !/^[a-zA-Z0-9-]{12,80}$/.test(b.sessionId || "") ||
+      typeof b.sessionId !== "string" ||
+      !/^[a-zA-Z0-9-]{12,80}$/.test(b.sessionId) ||
       !["play", "progress", "ended", "cta"].includes(b.event)
     )
       throw problem(400, "Invalid playback event.");
@@ -357,15 +384,22 @@ export function registerSharing({
       throw problem(400, "Add your name, comment and a valid timestamp.");
     let parent = null;
     if (b.parentId) {
+      if (typeof b.parentId !== "string")
+        throw problem(400, "The reply target was not found.");
       const row = db
         .prepare("SELECT id,parent_id FROM comments WHERE id=? AND video_id=?")
         .get(b.parentId, v.id);
       if (!row) throw problem(400, "The reply target was not found.");
       parent = row.parent_id || row.id;
     }
+    // Each person is mentioned once, however often the comment names them.
     const mentions = [
-      ...body.matchAll(/@([a-zA-Z0-9_.+-]+(?:@[a-zA-Z0-9.-]+)?)/g),
-    ].map((m) => m[1]);
+      ...new Map(
+        [...body.matchAll(/@([a-zA-Z0-9_.+-]+(?:@[a-zA-Z0-9.-]+)?)/g)].map(
+          (m) => [m[1].toLowerCase(), m[1]],
+        ),
+      ).values(),
+    ].slice(0, 10);
     db.prepare(
       "INSERT INTO comments(id,video_id,author,body,time,created,parent_id,mentions,member_id) VALUES(?,?,?,?,?,?,?,?,?)",
     ).run(
@@ -380,6 +414,7 @@ export function registerSharing({
       req.user?.id || null,
     );
     notify(v.id, "comment", `${author}: ${body.slice(0, 180)}`);
+    const told = new Set();
     for (const mention of mentions) {
       const m = db
         .prepare(
@@ -390,13 +425,15 @@ export function registerSharing({
           mention.toLowerCase(),
           mention.toLowerCase(),
         );
-      if (m)
+      if (m && !told.has(m.id)) {
+        told.add(m.id);
         notify(
           v.id,
           "mention",
           `${author} mentioned you in “${v.title}”.`,
           m.id,
         );
+      }
     }
   };
   app.post("/api/videos/:id/comments", owner, rateLimit, (req, res) => {
@@ -463,14 +500,20 @@ export function registerSharing({
     ),
   );
   app.post("/api/notifications/:id/read", owner, (req, res) => {
+    // Workspace-wide notifications are one shared list, which only the owner clears.
+    const mine =
+      req.user.role === "owner"
+        ? "(member_id IS NULL OR member_id=?)"
+        : "member_id=?";
     if (req.params.id === "all")
-      db.prepare(
-        "UPDATE notifications SET seen=1 WHERE member_id IS NULL OR member_id=?",
-      ).run(req.user.id);
+      db.prepare(`UPDATE notifications SET seen=1 WHERE ${mine}`).run(
+        req.user.id,
+      );
     else
-      db.prepare(
-        "UPDATE notifications SET seen=1 WHERE id=? AND (member_id IS NULL OR member_id=?)",
-      ).run(req.params.id, req.user.id);
+      db.prepare(`UPDATE notifications SET seen=1 WHERE id=? AND ${mine}`).run(
+        req.params.id,
+        req.user.id,
+      );
     res.json({ ok: true });
   });
   app.get("/api/settings", owner, (req, res) =>

@@ -1,11 +1,57 @@
 import { radio } from "./Modal";
-import { useId, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import { Ban, Plus, Trash2 } from "lucide-react";
 import type { Project } from "./types";
 import { PRESETS, WALLPAPERS, type LayoutPreset } from "./layoutPlan";
 import "./look-panel.css";
 
-const pct = (n: number, of: number) => `${(n / of) * 100}%`;
+// A number you can type freely. A value is applied as soon as it makes sense, so
+// half-typed or emptied text never reaches the project; leaving the field puts
+// back the last good value.
+export function NumberField({
+  value,
+  onCommit,
+  min,
+  max,
+  step,
+  valid = () => true,
+}: {
+  value: number;
+  onCommit: (n: number) => void;
+  min: number;
+  max: number;
+  step?: string;
+  valid?: (n: number) => boolean;
+}) {
+  const [text, setText] = useState(String(value));
+  useEffect(() => setText(String(value)), [value]);
+  return (
+    <input
+      type="number"
+      min={min}
+      max={max}
+      step={step}
+      value={text}
+      onChange={(e) => {
+        setText(e.target.value);
+        const n = Number(e.target.value);
+        if (
+          e.target.value.trim() !== "" &&
+          Number.isFinite(n) &&
+          n >= min &&
+          n <= max &&
+          valid(n) &&
+          n !== value
+        )
+          onCommit(n);
+      }}
+      onBlur={() => setText(String(value))}
+    />
+  );
+}
+
+// The shortest a layout change may be, with room for floating-point subtraction.
+const MIN_SCENE = 0.5 - 1e-6;
 
 // One slider everywhere: its name, how far along it is, and the value in words.
 export function Slider({
@@ -91,8 +137,6 @@ export function LookControls({
   project,
   total,
   edit,
-  previewing,
-  setPreviewing,
   now,
   children,
 }: {
@@ -100,8 +144,6 @@ export function LookControls({
   project: Project;
   total: number;
   edit: (fn: (p: Project) => void) => void;
-  previewing: string;
-  setPreviewing: (id: string) => void;
   // Where the preview is paused, for "start here" and "end here".
   now: () => number;
   children?: ReactNode;
@@ -124,7 +166,6 @@ export function LookControls({
         end: +Math.min(total, start + 4).toFixed(1),
         preset: (p.layout.preset || "pip") === "pip" ? "side" : "pip",
       });
-      setPreviewing(id);
     });
   if (part === "background")
     return (
@@ -207,7 +248,6 @@ export function LookControls({
         value={(l.preset || "pip") as LayoutPreset}
         onChange={(preset) => {
           edit((p) => (p.layout.preset = preset));
-          setPreviewing("base");
         }}
       />
       {scenes.map((s, i) => (
@@ -224,33 +264,28 @@ export function LookControls({
             value={s.preset as LayoutPreset}
             onChange={(preset) => {
               edit((p) => (p.scenes![i].preset = preset));
-              setPreviewing(s.id);
             }}
           />
           <label>
             Starts at (sec)
-            <input
-              type="number"
+            <NumberField
               min={0}
               max={total}
               step=".1"
               value={s.start}
-              onChange={(e) =>
-                edit((p) => (p.scenes![i].start = +e.target.value))
-              }
+              valid={(n) => s.end - n >= MIN_SCENE}
+              onCommit={(n) => edit((p) => (p.scenes![i].start = n))}
             />
           </label>
           <label>
             Ends at (sec)
-            <input
-              type="number"
+            <NumberField
               min={0}
               max={total}
               step=".1"
               value={s.end}
-              onChange={(e) =>
-                edit((p) => (p.scenes![i].end = +e.target.value))
-              }
+              valid={(n) => n - s.start >= MIN_SCENE}
+              onCommit={(n) => edit((p) => (p.scenes![i].end = n))}
             />
           </label>
           <button
@@ -282,7 +317,6 @@ export function LookControls({
             aria-label={`Remove layout change ${i + 1}`}
             onClick={(e) => {
               edit((p) => p.scenes!.splice(i, 1));
-              setPreviewing("base");
               // Keep the keyboard somewhere sensible once this row is gone.
               e.currentTarget
                 .closest(".look-controls")

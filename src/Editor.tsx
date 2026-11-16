@@ -5,18 +5,13 @@ import {
   Link,
   Download,
   MessageSquare,
-  Scissors,
-  Check,
   Send,
   Copy,
   Unlink,
-  LoaderCircle,
   FileText,
   Eye,
   Star,
-  Folder,
   Trash2,
-  MoreHorizontal,
 } from "lucide-react";
 import { api, bytes, clock, mediaURL, type Clip } from "./types";
 import { ShareSettings } from "./ShareSettings";
@@ -27,6 +22,7 @@ import { WatchPlayer } from "./WatchPlayer";
 import { Menu, Modal, confirmDialog, tab as tabAttrs, tabPanel } from "./Modal";
 import { Logo } from "./Logo";
 import { external, MAKER_URL, REPO_URL } from "./links";
+import { isLocal as localOnly } from "./local";
 // Groups transcript words into short phrases a viewer can read and jump to.
 function phrases(words: { text: string; start: number }[]) {
   const out: { start: number; text: string }[] = [];
@@ -48,7 +44,6 @@ function phrases(words: { text: string; start: number }[]) {
   return out;
 }
 // A link to this computer only opens here, so sending means downloading the file.
-const localOnly = ["127.0.0.1", "localhost"].includes(location.hostname);
 export function Editor({
   initial,
   token,
@@ -204,6 +199,74 @@ export function Editor({
       if (thenDownload) location.href = `${mediaURL(clip, token)}?download=1`;
     } finally {
       setUpdating(false);
+    }
+  };
+  // The comment box only needs the playhead to the tenth of a second, and anything
+  // finer would redraw the whole page on every frame of playback.
+  const tick = (t: number) => setTime(Math.round(t * 10) / 10);
+  // A connected server turns "send the file" into "send a link".
+  const [cloud, setCloud] = useState<{
+      connected: boolean;
+      url?: string;
+    } | null>(null),
+    [sendingLink, setSendingLink] = useState(false);
+  useEffect(() => {
+    if (!sharing || !localOnly) return;
+    let current = true;
+    void api<{ connected: boolean; url?: string }>("/api/cloud")
+      .then((c) => current && setCloud(c))
+      .catch(() => current && setCloud({ connected: false }));
+    return () => {
+      current = false;
+    };
+  }, [sharing]);
+  const linkIsOld =
+    Boolean(clip.cloud) &&
+    (pending || (clip.cloud?.revision ?? 0) < (clip.revision ?? 0));
+  const sendLink = async () => {
+    setSendingLink(true);
+    setError("");
+    try {
+      if (pending && !(await draft.current?.publish()))
+        return setError(
+          "The video couldn’t be updated just now. Close this and try Update video again.",
+        );
+      update(
+        await api<Clip>(`/api/videos/${clip.id}/cloud`, { method: "POST" }),
+      );
+      notify("Your link is ready");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSendingLink(false);
+    }
+  };
+  const removeLink = async () => {
+    if (
+      !(await confirmDialog({
+        title: "Take this link down?",
+        body: "The video is removed from the server and the link stops working for everyone. Your copy here is not touched.",
+        confirm: "Take link down",
+        cancel: "Keep link",
+        destructive: true,
+      }))
+    )
+      return;
+    try {
+      update(
+        await api<Clip>(`/api/videos/${clip.id}/cloud`, { method: "DELETE" }),
+      );
+      notify("Link taken down");
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(clip.cloud!.url);
+      notify("Link copied");
+    } catch {
+      setError("Clipboard unavailable. Select and copy the link below.");
     }
   };
   // However the dialog is closed, what was typed in it is kept.
@@ -414,7 +477,7 @@ export function Editor({
                 duration={clip.duration}
                 hasCaptions={!!clip.transcript?.length}
                 label={clip.title}
-                onTime={setTime}
+                onTime={tick}
                 onReady={(v) => {
                   const t = Number(
                     new URLSearchParams(location.search).get("t"),
@@ -441,12 +504,14 @@ export function Editor({
           {canEdit && (
             <StudioWorkbench
               ref={draft}
-              onTime={setTime}
+              onTime={tick}
               onPending={setPending}
               clip={clip}
               onRendered={(v) => {
+                // Keep anything being typed; otherwise show what was saved.
+                setTitle((t) => (t === clip.title ? v.title : t));
+                setNotes((n) => (n === clip.description ? v.description : n));
                 update(v);
-                setTitle(v.title);
               }}
               notify={notify}
             />
@@ -801,15 +866,82 @@ export function Editor({
           )}
           {localOnly ? (
             <>
-              <p className="share-note">
-                Relay is running only on this computer, so a link wouldn’t open
-                for anyone else. Download the video and send the file.
-              </p>
+              {!cloud?.connected ? (
+                <p className="share-note">
+                  Relay is running only on this computer, so a link wouldn’t
+                  open for anyone else. Download the video and send the file.
+                </p>
+              ) : clip.cloud ? (
+                <>
+                  <label className="share-link">
+                    <Link size={18} />
+                    <input
+                      aria-label="Link anyone can open"
+                      readOnly
+                      value={clip.cloud.url}
+                      onFocus={(e) => e.target.select()}
+                    />
+                    <button
+                      className="btn primary"
+                      onClick={() => void copyLink()}
+                    >
+                      <Copy size={14} />
+                      Copy link
+                    </button>
+                  </label>
+                  <div className="share-actions" role="status">
+                    {(linkIsOld || sendingLink) && (
+                      <>
+                        <span className="small">
+                          {sendingLink
+                            ? "Sending the new version…"
+                            : "This link plays an older version."}
+                        </span>
+                        <button
+                          className="btn small"
+                          disabled={sendingLink || updating}
+                          onClick={() => void sendLink()}
+                        >
+                          Update link
+                        </button>
+                      </>
+                    )}
+                    <button
+                      className="text-button danger"
+                      disabled={sendingLink}
+                      onClick={() => void removeLink()}
+                    >
+                      Take link down
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p className="share-note">
+                    Send this video to {new URL(cloud.url!).host} to get a link
+                    anyone can open.
+                  </p>
+                  <div className="share-actions" role="status">
+                    <button
+                      className="btn primary"
+                      disabled={sendingLink || updating}
+                      onClick={() => void sendLink()}
+                    >
+                      <Link size={16} />
+                      {sendingLink
+                        ? "Sending your video…"
+                        : pending
+                          ? "Update and get a link"
+                          : "Get a link"}
+                    </button>
+                  </div>
+                </>
+              )}
               {pending || updating ? (
                 <div className="share-actions" role="status">
                   <button
-                    className="btn primary"
-                    disabled={updating}
+                    className={`btn ${cloud?.connected ? "" : "primary"}`}
+                    disabled={updating || sendingLink}
                     onClick={() => void publishHere(true)}
                   >
                     <Download size={16} />
@@ -828,12 +960,30 @@ export function Editor({
                 </div>
               ) : (
                 <a
-                  className="btn primary share-download"
+                  className={`btn share-download ${cloud?.connected ? "" : "primary"}`}
                   href={`${mediaURL(clip, token)}?download=1`}
                 >
                   <Download size={16} />
                   Download video
                 </a>
+              )}
+              {cloud && !cloud.connected && (
+                <p className="small muted share-connect">
+                  Want a link anyone can open?{" "}
+                  <button
+                    className="text-button"
+                    onClick={() => {
+                      void closeShare();
+                      dispatchEvent(
+                        new CustomEvent("relay:open-settings", {
+                          detail: "cloud",
+                        }),
+                      );
+                    }}
+                  >
+                    Connect a server
+                  </button>
+                </p>
               )}
               <details
                 className="cut-more share-local"

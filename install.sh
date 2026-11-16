@@ -41,11 +41,15 @@ APP="$DEST/Relay.app"
 
 TMP="$(mktemp -d)"
 MOUNT="$TMP/mount"
+# The half-installed copy, once there is one.
+STAGE=""
 cleanup() {
   hdiutil detach "$MOUNT" -quiet -force 2>/dev/null || true
   rm -rf "$TMP"
+  [ -z "$STAGE" ] || rm -rf "$STAGE"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT TERM
 
 printf '→ Downloading Relay for %s Macs…\n' "$([ "$ARCH" = arm64 ] && echo 'Apple Silicon' || echo 'Intel')"
 curl -fL --retry 3 --progress-bar "$BASE/$FILE" -o "$TMP/$FILE" ||
@@ -74,9 +78,11 @@ ditto "$MOUNT/Relay.app" "$STAGE" || {
   fail "Couldn't copy Relay into $DEST. Is the disk full?"
 }
 # Relay is signed with its Developer ID and notarized by Apple. Make sure this copy
-# is the real thing before it replaces anything.
-codesign --verify --deep --strict "$STAGE" 2>/dev/null &&
-  codesign -dv "$STAGE" 2>&1 | grep -q "^TeamIdentifier=$TEAM\$" || {
+# is the real thing before it replaces anything: the signature must chain to Apple
+# through a Developer ID certificate issued to Relay's team.
+codesign --verify --deep --strict \
+  -R='anchor apple generic and certificate leaf[subject.OU] = "'"$TEAM"'" and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists' \
+  "$STAGE" 2>/dev/null || {
   rm -rf "$STAGE"
   fail "This download isn't signed by Relay's developer. Nothing was installed."
 }
@@ -88,8 +94,15 @@ if pgrep -xq Relay; then
     sleep 0.5
     i=$((i + 1))
   done
+  if pgrep -xq Relay; then
+    rm -rf "$STAGE"
+    fail "Relay is still running. Quit it, then run this installer again. Nothing was changed."
+  fi
 fi
-rm -rf "$APP"
+rm -rf "$APP" || {
+  rm -rf "$STAGE"
+  fail "Couldn't replace the Relay already in $DEST. macOS may be blocking Terminal from changing apps: allow it in System Settings > Privacy & Security > App Management, then run this installer again."
+}
 mv "$STAGE" "$APP" || fail "Couldn't move Relay into place in $DEST."
 
 printf '✓ Relay is installed in %s. Opening it now…\n' "$DEST"

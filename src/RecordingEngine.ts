@@ -2,23 +2,34 @@ import {
   createDraft,
   savePart,
   updateDraft,
-  getDraft,
   type Draft,
   type TrackRole,
 } from "./drafts";
 import type { CaptureSession } from "./media";
+
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 export class RecordingEngine {
   capture: CaptureSession;
   id = "";
   recorders: MediaRecorder[] = [];
-  writes: Promise<unknown>[] = [];
+  // One chain of writes per track, so chunks are stored strictly in order.
+  writes: Promise<void>[] = [];
+  // The picture. The take cannot go on without it.
+  main: TrackRole = "screen";
+  // Where the stored picture ends, in seconds.
+  storedEnd = 0;
+  storageFailed = false;
   elapsed = 0;
   started = 0;
   paused = false;
   stopped = false;
   excluded: { start: number; end: number }[] = [];
   pointers: { time: number; x: number; y: number }[] = [];
+  // The take had to stop early. The message says why.
   onFailure: (message: string) => void = () => {};
+  // Something was lost, but the take carries on.
+  onNotice: (message: string) => void = () => {};
   stopPromise?: Promise<Draft | undefined>;
   release: () => void = () => {};
   constructor(capture: CaptureSession) {
@@ -32,6 +43,7 @@ export class RecordingEngine {
   }
   async start(layout?: Draft["meta"]["layout"]) {
     const roles = Object.keys(this.capture.tracks) as TrackRole[];
+    this.main = roles.includes("screen") ? "screen" : "camera";
     const draft = await createDraft({ roles, layout, excluded: [] });
     this.id = draft.id;
     // Held for the life of the take so other tabs know it is still recording.
@@ -41,7 +53,7 @@ export class RecordingEngine {
         () => new Promise<void>((r) => (this.release = r)),
       )
       .catch(() => {});
-    for (const role of roles) {
+    roles.forEach((role, index) => {
       const stream = this.capture.tracks[role]!;
       const audioOnly = !stream.getVideoTracks().length;
       const types = audioOnly
@@ -55,43 +67,70 @@ export class RecordingEngine {
           : { videoBitsPerSecond: 6000000 }),
       });
       let seq = 0;
+      this.writes[index] = Promise.resolve();
       recorder.ondataavailable = (event) => {
-        if (event.data.size) {
-          const write = savePart(
-            this.id,
-            role,
-            seq++,
-            event.data,
-            this.seconds(),
-          ).catch((error) => {
-            this.onFailure(`Local recording storage failed: ${error.message}`);
-            this.pause();
-            throw error;
-          });
-          this.writes.push(write);
-          void write.catch(() => {});
-        }
+        if (!event.data.size) return;
+        const blob = event.data,
+          end = this.seconds();
+        // A number is used up only once its chunk is safely stored, so a failed
+        // write can never leave a gap that would make the whole take unusable.
+        this.writes[index] = this.writes[index].then(async () => {
+          for (let attempt = 0; !this.storageFailed; attempt++) {
+            try {
+              await savePart(this.id, role, seq, blob, end);
+              seq += 1;
+              if (role === this.main) this.storedEnd = end;
+              return;
+            } catch {
+              if (attempt < 3) await wait(300 * 2 ** attempt);
+              else this.storageFull();
+            }
+          }
+        });
       };
-      recorder.onerror = () => {
-        this.onFailure(
-          `The ${role} track was interrupted. Saved chunks can be recovered.`,
-        );
-        void this.stop();
-      };
+      recorder.onerror = () => this.lost(role, true);
       this.recorders.push(recorder);
-    }
+    });
     this.started = performance.now();
     for (const r of this.recorders) r.start(1000);
-    for (const stream of Object.values(this.capture.tracks))
-      for (const track of stream!.getTracks())
-        track.addEventListener(
-          "ended",
-          () => {
-            void this.stop();
-          },
-          { once: true },
-        );
+    for (const role of roles)
+      for (const track of this.capture.tracks[role]!.getTracks())
+        track.addEventListener("ended", () => this.lost(role), { once: true });
     return draft;
+  }
+  // A track ended or its recorder failed. Losing the picture ends the take;
+  // losing anything else is reported and the take carries on.
+  private lost(role: TrackRole, failed = false) {
+    if (this.stopped) return;
+    if (role !== this.main) {
+      // Sound shared with the screen ends along with it. Wait a moment, so the
+      // end of the take is not reported as a lost device.
+      setTimeout(() => {
+        if (!this.stopped)
+          this.onNotice(
+            `${role === "system" ? "Computer sound stopped" : `Your ${role} disconnected`}. The recording is still going without it.`,
+          );
+      }, 400);
+      return;
+    }
+    // "Stop sharing" is a normal way to finish. Anything else gets an explanation.
+    if (failed)
+      this.onFailure(
+        "The recording was interrupted. What you recorded so far is kept.",
+      );
+    else if (role === "camera")
+      this.onFailure(
+        "Your camera disconnected, so the recording stopped. What you recorded so far is kept.",
+      );
+    void this.stop();
+  }
+  private storageFull() {
+    if (this.storageFailed) return;
+    this.storageFailed = true;
+    this.onFailure(
+      "This device couldn’t save any more, so the recording stopped. Everything up to that point is kept. Free up some disk space before you record again.",
+    );
+    void this.stop();
   }
   pause() {
     if (this.paused || this.stopped) return;
@@ -111,13 +150,9 @@ export class RecordingEngine {
       start = Math.max(0, end - seconds);
     if (end - start < 0.1) return;
     this.excluded.push({ start, end });
-    void getDraft(this.id).then(
-      (d) =>
-        d &&
-        updateDraft(this.id, {
-          meta: { ...d.meta, excluded: this.excluded, pointers: this.pointers },
-        }),
-    );
+    void updateDraft(this.id, (d) => ({
+      meta: { ...d.meta, excluded: this.excluded, pointers: this.pointers },
+    })).catch(() => {});
   }
   point(point: { x: number; y: number }) {
     if (this.stopped || this.paused || this.pointers.length >= 20000) return;
@@ -130,7 +165,7 @@ export class RecordingEngine {
   }
   private async finish() {
     this.stopped = true;
-    const duration = this.seconds();
+    let duration = this.seconds();
     this.elapsed = duration * 1000;
     this.started = 0;
     await Promise.all(
@@ -143,20 +178,16 @@ export class RecordingEngine {
           }),
       ),
     );
-    const writes = await Promise.allSettled(this.writes);
+    await Promise.all(this.writes);
     this.release();
     this.capture.cleanup();
-    const d = (await getDraft(this.id))!;
-    return updateDraft(this.id, {
+    // Storage ran out: the take ends where its stored footage does.
+    if (this.storageFailed && this.storedEnd)
+      duration = Math.min(duration, this.storedEnd);
+    return updateDraft(this.id, (d) => ({
       status: "review",
       duration,
       meta: { ...d.meta, excluded: this.excluded, pointers: this.pointers },
-      ...(writes.some((r) => r.status === "rejected")
-        ? {
-            error:
-              "Some chunks could not be stored. Recover the saved portion from Activity.",
-          }
-        : {}),
-    });
+    }));
   }
 }

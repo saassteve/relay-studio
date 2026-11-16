@@ -1,17 +1,7 @@
 import express from "express";
 import path from "node:path";
 import { createApp } from "./app.mjs";
-import { execFileSync } from "node:child_process";
-// Stop any media engine or AI worker this server started.
-function stopChildren() {
-  try {
-    execFileSync("pkill", ["-TERM", "-P", String(process.pid)], {
-      stdio: "ignore",
-    });
-  } catch {
-    /* No children were running. */
-  }
-}
+import { stopChildren } from "./children.mjs";
 
 const { app, close } = createApp({
   dataDir: process.env.RELAY_DATA_DIR,
@@ -27,6 +17,9 @@ setInterval(() => {
   }
 }, 2000).unref();
 app.use(express.static(path.resolve("dist")));
+// A missing build file must not be answered with the app's page: a browser
+// would cache that HTML as a script.
+app.use("/assets", (req, res) => res.status(404).end());
 app.get("/{*path}", (req, res) =>
   res.sendFile("index.html", { root: path.resolve("dist") }),
 );

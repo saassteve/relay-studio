@@ -13,6 +13,8 @@ export interface CaptureOptions {
   region?: { x: number; y: number; w: number; h: number };
   frameRate?: number;
   look?: CameraLook;
+  // The chosen camera or microphone has gone, and the default was used instead.
+  onMissingDevice?: (device: InputDevice) => void;
 }
 export type CaptureSession = {
   stream: MediaStream;
@@ -30,8 +32,45 @@ const ready = async (stream: MediaStream) => {
   await v.play();
   return v;
 };
+export type InputDevice = "camera" | "microphone";
+const KIND = { camera: "videoinput", microphone: "audioinput" } as const;
+// True when a remembered device is not one this browser can see. Ids are empty
+// until camera or microphone access is allowed, so those lists prove nothing.
+export function deviceMissing(
+  devices: MediaDeviceInfo[],
+  device: InputDevice,
+  id: string,
+) {
+  const ids = devices
+    .filter((d) => d.kind === KIND[device] && d.deviceId)
+    .map((d) => d.deviceId);
+  return Boolean(id) && ids.length > 0 && !ids.includes(id);
+}
+// Opens the chosen camera or microphone. A remembered device that has been
+// unplugged, or was chosen in another browser, falls back to the default.
+export async function openInput(
+  device: InputDevice,
+  id: string | undefined,
+  constraints: MediaTrackConstraints = {},
+  onMissing?: () => void,
+): Promise<MediaStream> {
+  const open = (wanted: MediaTrackConstraints) =>
+    navigator.mediaDevices.getUserMedia(
+      device === "camera" ? { video: wanted, audio: false } : { audio: wanted },
+    );
+  if (!id) return open(constraints);
+  try {
+    return await open({ ...constraints, deviceId: { exact: id } });
+  } catch (e) {
+    const name = (e as Error).name;
+    if (name !== "OverconstrainedError" && name !== "NotFoundError") throw e;
+    const stream = await open(constraints);
+    onMissing?.();
+    return stream;
+  }
+}
 // Turns a browser refusal into words that say what to do about it.
-const refused = (device: "camera" | "microphone") => (e: unknown) => {
+const refused = (device: InputDevice) => (e: unknown) => {
   const err = e as Error;
   if (err.name === "NotAllowedError" || err.name === "SecurityError")
     throw Object.assign(
@@ -93,39 +132,33 @@ export async function acquireCapture(
       owned.push(screen);
     }
     if (mode !== "screen") {
-      camera = await navigator.mediaDevices
-        .getUserMedia({
-          video: {
-            ...(options.cameraId
-              ? { deviceId: { exact: options.cameraId } }
-              : {}),
-            width: { ideal: mode === "camera" ? quality : 1280 },
-            height: { ideal: mode === "camera" ? (quality * 9) / 16 : 720 },
-          },
-          audio: false,
-        })
-        .catch(refused("camera"));
+      camera = await openInput(
+        "camera",
+        options.cameraId,
+        {
+          width: { ideal: mode === "camera" ? quality : 1280 },
+          height: { ideal: mode === "camera" ? (quality * 9) / 16 : 720 },
+        },
+        () => options.onMissingDevice?.("camera"),
+      ).catch(refused("camera"));
       owned.push(camera);
       // Filters and backgrounds are applied live, so the recorded camera track
       // looks exactly like the preview.
       if (options.look && !isPlain(options.look)) {
         look = await createCameraPipeline(camera, options.look);
+        // Stops here if the background can't start: recording without it would
+        // show the room the background was chosen to hide.
         await look.ready;
         camera = look.stream;
       }
     }
     if (mic) {
-      microphone = await navigator.mediaDevices
-        .getUserMedia({
-          audio: {
-            ...(options.microphoneId
-              ? { deviceId: { exact: options.microphoneId } }
-              : {}),
-            echoCancellation: true,
-            noiseSuppression: true,
-          },
-        })
-        .catch(refused("microphone"));
+      microphone = await openInput(
+        "microphone",
+        options.microphoneId,
+        { echoCancellation: true, noiseSuppression: true },
+        () => options.onMissingDevice?.("microphone"),
+      ).catch(refused("microphone"));
       owned.push(microphone);
     }
     const originalScreen = screen;
@@ -242,13 +275,15 @@ export async function acquireCapture(
       originalScreen.getVideoTracks()[0].addEventListener(
         "ended",
         () => {
-          tracks.screen
-            ?.getVideoTracks()
-            .forEach((t) => t.dispatchEvent(new Event("ended")));
-          stream.getVideoTracks().forEach((t) => {
+          // A cropped region and the preview are drawn copies that would carry
+          // on by themselves, so they are ended along with the real screen.
+          for (const t of [
+            ...(tracks.screen?.getVideoTracks() || []),
+            ...stream.getVideoTracks(),
+          ]) {
             t.stop();
             t.dispatchEvent(new Event("ended"));
-          });
+          }
         },
         { once: true },
       );
@@ -348,10 +383,7 @@ export async function createDemo(): Promise<Blob> {
     ),
     chunks: Blob[] = [];
   return new Promise((resolve, reject) => {
-    let frame = 0,
-      regionFrame = 0;
-    let regionStream: MediaStream | undefined;
-    let analyser: AnalyserNode | undefined;
+    let frame = 0;
     const start = performance.now();
     const draw = () => {
       const t = (performance.now() - start) / 1000;

@@ -16,6 +16,10 @@ export function migrateStudio(db) {
     share_config: "TEXT NOT NULL DEFAULT '{}'",
     revision: "INTEGER NOT NULL DEFAULT 0",
     history_cursor: "INTEGER NOT NULL DEFAULT 0",
+    // Where this video is published on a connected server: {url, revision, at}.
+    cloud: "TEXT NOT NULL DEFAULT '{}'",
+    // On a server: the id of the video in the Relay app that published it here.
+    source_ref: "TEXT",
   }))
     add("videos", name, type);
   for (const [name, type] of Object.entries({
@@ -52,8 +56,9 @@ export const parseJSON = (value, fallback) => {
     return fallback;
   }
 };
+// An error whose message is written for the person using Relay, and safe to show.
 export const problem = (status, message, extra = {}) =>
-  Object.assign(new Error(message), { status, ...extra });
+  Object.assign(new Error(message), { status, expected: true, ...extra });
 
 // Media is only ever served with a known audio/video type, whatever was stored.
 const MEDIA_TYPES = new Set([
@@ -77,6 +82,20 @@ export function mediaHeaders(res, mime) {
     "Cache-Control": "private, no-store",
   });
 }
+// Sends a stored file. One that is missing from disk is an ordinary 404, so the
+// failure's own wording, which names the server's folders, never reaches the reply.
+export const sendMedia = (res, filename, root, next) =>
+  res.sendFile(filename, { root }, (err) => {
+    if (!err || res.headersSent || err.code === "ECONNABORTED") return;
+    // The reply is now a message, not the media these were set for.
+    for (const name of ["Content-Type", "Content-Disposition"])
+      res.removeHeader(name);
+    next(
+      err.status === 416
+        ? problem(416, "That part of the video doesn’t exist.")
+        : problem(404, "This video file is missing."),
+    );
+  });
 // Keeps job errors useful without exposing command lines or server paths.
 export function publicError(error) {
   const text = String(error?.message || error || "This job failed.");

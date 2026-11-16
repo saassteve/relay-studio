@@ -3,24 +3,19 @@ import { randomUUID, createHash } from "node:crypto";
 import {
   mkdirSync,
   writeFileSync,
-  existsSync,
-  readFileSync,
+  readdirSync,
   statSync,
   createWriteStream,
   createReadStream,
   renameSync,
   rmSync,
 } from "node:fs";
-import { pipeline } from "node:stream/promises";
 import { finished } from "node:stream/promises";
 import path from "node:path";
-import ffmpeg from "../ffmpeg.mjs";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { parseJSON, problem, safeMime } from "./schema.mjs";
 import { autoZoom } from "./autozoom.mjs";
 import { initialProject, cutRanges, validateProject } from "./project.mjs";
-const run = promisify(execFile);
+import { engine } from "./render.mjs";
 const roles = ["screen", "camera", "microphone", "system"];
 const isId = (id) => /^[a-f0-9-]{36}$/.test(id);
 export function registerRecordings({
@@ -30,12 +25,15 @@ export function registerRecordings({
   owner,
   jobs,
   find,
-  serialize,
   renderer,
   autoTranscribe,
 }) {
   const root = path.join(dataDir, "recordings");
   mkdirSync(root, { recursive: true });
+  // Earlier versions could leave a finished recording marked as in progress.
+  db.prepare(
+    "UPDATE recordings SET status='complete' WHERE status='processing' AND video_id IN (SELECT id FROM videos WHERE revision>0)",
+  ).run();
   const get = (id) => {
     const row = db.prepare("SELECT * FROM recordings WHERE id=?").get(id);
     if (!row) throw problem(404, "This recording session was not found.");
@@ -204,26 +202,49 @@ export function registerRecordings({
     db.prepare("DELETE FROM recording_parts WHERE recording_id=?").run(row.id);
     res.json({ ok: true });
   });
+  // Removes a video whose first render never finished, and its files.
+  const discard = (videoId) => {
+    db.prepare("DELETE FROM assets WHERE video_id=?").run(videoId);
+    db.prepare("DELETE FROM videos WHERE id=?").run(videoId);
+    const folder = path.join(dataDir, "media");
+    for (const file of readdirSync(folder))
+      if (file.startsWith(`${videoId}-`))
+        rmSync(path.join(folder, file), { force: true });
+  };
   jobs.register("finish-recording", async ({ recordingId }, progress) => {
-    const row = get(recordingId);
-    if (
-      row.video_id &&
-      db.prepare("SELECT id FROM videos WHERE id=?").get(row.video_id)
-    )
+    const row = get(recordingId),
+      made =
+        row.video_id &&
+        db.prepare("SELECT revision FROM videos WHERE id=?").get(row.video_id);
+    // Already a finished video, as when an old job is retried after a later
+    // one succeeded. There is nothing to redo.
+    if (made?.revision > 0) {
+      db.prepare(
+        "UPDATE recordings SET status='complete' WHERE id=? AND status='processing'",
+      ).run(row.id);
       return { videoId: row.video_id };
+    }
+    if (row.status !== "processing")
+      throw problem(409, "This recording is no longer waiting to be finished.");
     const meta = parseJSON(row.meta, {}),
       trackRows = db
         .prepare(
           "SELECT role,MIN(mime) AS mime FROM recording_parts WHERE recording_id=? GROUP BY role",
         )
         .all(row.id),
-      videoId = randomUUID(),
+      // The recording remembers its video while that is being made. If Relay
+      // quits partway, the next run clears the half-made video and starts again
+      // under the same id rather than leaving a second copy in the library.
+      videoId = row.video_id || randomUUID(),
       assets = [],
-      created = [],
       filename = `${videoId}-r1.mp4`,
       destination = path.join(dataDir, "media", filename);
-    // Everything from the first remux on is undone together if any step fails,
-    // so a retry never leaves an orphaned video behind.
+    if (row.video_id) discard(videoId);
+    else
+      db.prepare("UPDATE recordings SET video_id=? WHERE id=?").run(
+        videoId,
+        row.id,
+      );
     try {
       for (let i = 0; i < trackRows.length; i++) {
         const track = trackRows[i],
@@ -256,27 +277,18 @@ export function registerRecordings({
         const ext = track.mime.includes("mp4") ? "mp4" : "webm",
           trackFile = `${videoId}-${track.role}.${ext}`,
           target = path.join(dataDir, "media", trackFile);
-        created.push(trackFile);
-        await run(
-          ffmpeg,
-          [
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-nostdin",
-            "-y",
-            // Name the container explicitly rather than trusting the bytes.
-            "-f",
-            ext === "mp4" ? "mov" : "matroska",
-            "-i",
-            joined,
-            "-c",
-            "copy",
-            ...(ext === "mp4" ? ["-movflags", "+faststart"] : []),
-            target,
-          ],
-          { timeout: 600000, maxBuffer: 1024 * 1024 },
-        );
+        await engine([
+          "-y",
+          // Name the container explicitly rather than trusting the bytes.
+          "-f",
+          ext === "mp4" ? "mov" : "matroska",
+          "-i",
+          joined,
+          "-c",
+          "copy",
+          ...(ext === "mp4" ? ["-movflags", "+faststart"] : []),
+          target,
+        ]);
         const info = await renderer.info({
           video_id: videoId,
           role: track.role,
@@ -295,12 +307,15 @@ export function registerRecordings({
       const primary =
         assets.find((a) => a.role === "screen") ||
         assets.find((a) => a.role === "camera");
+      // The browser's stopwatch can run a little past the end of the picture.
+      // Nothing can be cut or shown beyond what was actually recorded.
+      const length = Math.min(row.duration, primary.duration);
       db.prepare(
         "INSERT INTO videos(id,title,duration,size,mime,filename,created) VALUES(?,?,?,?,?,?,?)",
       ).run(
         videoId,
         row.title,
-        row.duration,
+        length,
         statSync(path.join(dataDir, "media", primary.filename)).size,
         "video/webm",
         primary.filename,
@@ -343,13 +358,10 @@ export function registerRecordings({
           audio: { ...project.layout.audio, ...meta.layout.audio },
         };
       for (const range of meta.excluded || []) {
-        if (
-          Number.isFinite(range.start) &&
-          Number.isFinite(range.end) &&
-          range.start >= 0 &&
-          range.end <= row.duration
-        )
-          project = cutRanges(project, videoId, [range]);
+        const start = Number(range?.start),
+          end = Math.min(Number(range?.end), length);
+        if (start >= 0 && end > start)
+          project = cutRanges(project, videoId, [{ start, end }]);
       }
       // Desktop recordings zoom into key moments automatically. Each zoom is an
       // ordinary, removable effect in the project.
@@ -359,7 +371,7 @@ export function registerRecordings({
           ...autoZoom(meta.pointers, {
             segments: project.segments,
             sourceId: videoId,
-            duration: row.duration,
+            duration: length,
           }),
         ].slice(0, 60);
       // Client-supplied layout reaches the render, so it is always validated.
@@ -370,44 +382,56 @@ export function registerRecordings({
         destination,
         (n) => progress(20 + n * 0.78),
       );
-      db.prepare(
-        "UPDATE videos SET project=?,published_project=?,filename=?,mime=?,size=?,thumbnail=?,duration=?,revision=1 WHERE id=?",
-      ).run(
-        JSON.stringify(project),
-        JSON.stringify(project),
-        filename,
-        "video/mp4",
-        rendered.size,
-        rendered.thumbnail,
-        rendered.duration,
-        videoId,
-      );
-      db.prepare("INSERT OR IGNORE INTO project_history VALUES(?,?,?,?)").run(
-        videoId,
-        0,
-        JSON.stringify(project),
-        new Date().toISOString(),
-      );
-      db.prepare(
-        "UPDATE recordings SET status='complete',video_id=? WHERE id=?",
-      ).run(videoId, row.id);
+      // The video and its recording are marked finished together.
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        db.prepare(
+          "UPDATE videos SET project=?,published_project=?,filename=?,mime=?,size=?,thumbnail=?,duration=?,revision=1 WHERE id=?",
+        ).run(
+          JSON.stringify(project),
+          JSON.stringify(project),
+          filename,
+          "video/mp4",
+          rendered.size,
+          rendered.thumbnail,
+          rendered.duration,
+          videoId,
+        );
+        db.prepare("INSERT OR IGNORE INTO project_history VALUES(?,?,?,?)").run(
+          videoId,
+          0,
+          JSON.stringify(project),
+          new Date().toISOString(),
+        );
+        db.prepare(
+          "UPDATE recordings SET status='complete',video_id=? WHERE id=?",
+        ).run(videoId, row.id);
+        db.exec("COMMIT");
+      } catch (e) {
+        db.exec("ROLLBACK");
+        throw e;
+      }
+    } catch (e) {
+      // Nothing of a failed attempt is kept; the chunks are, for a retry.
+      discard(videoId);
+      db.prepare("UPDATE recordings SET video_id=NULL WHERE id=?").run(row.id);
+      throw e;
+    }
+    // The video is finished and safe. A slip while tidying up must not undo it.
+    try {
       jobs.enqueue("stream", { videoId });
       // With the speech model already on this device, the transcript is made
       // straight away so captions and word-based cutting are ready.
-      if (assets.some((x) => x.role === "microphone")) autoTranscribe?.(videoId);
+      if (assets.some((x) => x.role === "microphone"))
+        autoTranscribe?.(videoId);
       rmSync(path.join(root, row.id), { recursive: true, force: true });
       db.prepare("DELETE FROM recording_parts WHERE recording_id=?").run(
         row.id,
       );
-      return { videoId };
     } catch (e) {
-      db.prepare("DELETE FROM assets WHERE video_id=?").run(videoId);
-      db.prepare("DELETE FROM videos WHERE id=?").run(videoId);
-      for (const file of created)
-        rmSync(path.join(dataDir, "media", file), { force: true });
-      rmSync(destination, { force: true });
-      throw e;
+      console.error("Tidying up after a recording:", e.message);
     }
+    return { videoId };
   });
   return { get };
 }

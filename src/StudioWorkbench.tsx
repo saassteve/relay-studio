@@ -8,18 +8,16 @@ import {
 } from "react";
 import { DraftPlayer, type DraftPlayerHandle } from "./DraftPlayer";
 import { Timeline } from "./Timeline";
-import { LookControls, Slider } from "./LookPanel";
+import { LookControls, NumberField, Slider } from "./LookPanel";
+import { insertSpan, removeSpan, swapSpans } from "./retime";
 import { AssistCard } from "./AssistCard";
 const isTitle = (type: string) =>
   type === "title" || type === "lowerthird" || type === "chapter";
-import type { LayoutPreset } from "./layoutPlan";
 import {
   ArrowDown,
   ArrowUp,
-  Check,
   Download,
   FileText,
-  Layers,
   LoaderCircle,
   Plus,
   Redo2,
@@ -28,7 +26,6 @@ import {
   Trash2,
   Undo2,
   Upload,
-  Volume2,
   Play,
   Palette,
   Send,
@@ -96,11 +93,8 @@ export const StudioWorkbench = forwardRef<
     [videos, setVideos] = useState<Clip[]>([]),
     [addId, setAddId] = useState(""),
     [selectedRaw, setSelected] = useState(0),
-    [previewing, setPreviewing] = useState("base"),
     [focusWord, setFocusWord] = useState(0),
     [editingWord, setEditingWord] = useState<number | null>(null),
-    [cutStart, setCutStart] = useState(0),
-    [cutEnd, setCutEnd] = useState(1),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(""),
     [job, setJob] = useState<Job | null>(null),
@@ -159,13 +153,9 @@ export const StudioWorkbench = forwardRef<
       document.documentElement.style.scrollPaddingTop = "";
     };
   }, [ready]);
-  const undo = useRef<Project[]>([]),
-    redo = useRef<Project[]>([]),
-    anchorWord = useRef<number | null>(null),
+  const anchorWord = useRef<number | null>(null),
     marker = useRef<HTMLElement>(null),
-    importCaptions = useRef<HTMLInputElement>(null),
-    unused = useRef<HTMLDivElement>(null);
-  void unused;
+    importCaptions = useRef<HTMLInputElement>(null);
   const load = async () => {
     const s = await api<ProjectState>(`/api/videos/${clip.id}/project`);
     setState(s);
@@ -179,6 +169,8 @@ export const StudioWorkbench = forwardRef<
     );
     setWords(result.words);
     setWordSelection([]);
+    setFocusWord(0);
+    anchorWord.current = null;
     if (sourceId === clip.id) setOutline(result.outline);
   };
   useEffect(() => {
@@ -190,35 +182,27 @@ export const StudioWorkbench = forwardRef<
   useEffect(() => {
     void transcript().catch((e) => setError(e.message));
   }, [sourceId]);
-  // One drag of a slider or one burst of typing is a single step to undo.
-  const lastChange = useRef(0);
-  const change = (next: Project) => {
-    const now = Date.now();
-    if (project && now - lastChange.current > 700)
-      undo.current.push(structuredClone(project));
-    lastChange.current = now;
-    redo.current = [];
+  // Always the newest project, including edits made since this render.
+  const latest = useRef(project);
+  latest.current = project;
+  const edit = (fn: (p: Project) => void) => {
+    if (!latest.current) return;
+    const next = structuredClone(latest.current);
+    fn(next);
+    latest.current = next;
     setProject(next);
     setDirty(true);
   };
-  const edit = (fn: (p: Project) => void) => {
-    if (!project) return;
-    const next = structuredClone(project);
-    fn(next);
-    // Trimming can leave a title or effect hanging past the end: keep what fits.
-    const length = next.segments.reduce((n, s) => n + s.end - s.start, 0);
-    next.overlays = next.overlays
-      .filter((o) => o.start <= length - 0.1)
-      .map((o) => (o.end > length ? { ...o, end: length } : o));
-    if (next.scenes)
-      next.scenes = next.scenes
-        .map((s) => (s.end > length ? { ...s, end: length } : s))
-        .filter((s) => s.end - s.start >= 0.5);
-    change(next);
-  };
   const total = project?.segments.reduce((n, s) => n + s.end - s.start, 0) || 0;
-  const latest = useRef(project);
-  latest.current = project;
+  // Where a section began and ended when a trim handle was picked up.
+  const trimFrom = useRef<{
+    i: number;
+    sourceId: string;
+    start: number;
+    end: number;
+  } | null>(null);
+  // Whether the message on screen is about a save that failed.
+  const saveError = useRef(false);
   const persist = async () => {
     if (!project) return;
     const snapshot = project;
@@ -232,9 +216,14 @@ export const StudioWorkbench = forwardRef<
       setState(result);
       // Only settle if nothing changed while this was saving.
       if (latest.current === snapshot) setDirty(false);
+      if (saveError.current) {
+        saveError.current = false;
+        setError("");
+      }
       return result;
     } catch (e) {
       setSaveFailed(true);
+      saveError.current = true;
       throw e;
     } finally {
       setSaving(false);
@@ -278,7 +267,20 @@ export const StudioWorkbench = forwardRef<
       JSON.stringify(state.published) !== JSON.stringify(project),
     );
   useEffect(() => onPending?.(pending), [pending, onPending]);
+  // If the footage a transcript belongs to is removed, go back to the main one.
+  useEffect(() => {
+    if (
+      project &&
+      sourceId !== clip.id &&
+      !project.segments.some((s) => s.sourceId === sourceId)
+    )
+      setSourceId(clip.id);
+  }, [project, sourceId, clip.id]);
+  // One long-running thing at a time, so a quick action can't hide a slow one.
+  const working = useRef(false);
   const action = async (label: string, fn: () => Promise<void>) => {
+    if (working.current) return false;
+    working.current = true;
     setBusy(label);
     setError("");
     try {
@@ -290,6 +292,7 @@ export const StudioWorkbench = forwardRef<
       notify(`${label} didn’t finish. ${(e as Error).message}`);
       return false;
     } finally {
+      working.current = false;
       setBusy("");
       setJob(null);
     }
@@ -322,25 +325,22 @@ export const StudioWorkbench = forwardRef<
     state?.sources.some((x) => x.role === "screen") &&
     state?.sources.some((x) => x.role === "camera"),
   );
+  // Every saved edit is a step in one history, kept with the video.
+  const canUndo = dirty || Boolean(state?.canUndo),
+    canRedo = !dirty && Boolean(state?.canRedo);
   const history = async (direction: "undo" | "redo") => {
-    if (!project) return;
-    const from = direction === "undo" ? undo : redo,
-      to = direction === "undo" ? redo : undo;
-    lastChange.current = 0;
-    if (from.current.length) {
-      to.current.push(project);
-      setProject(from.current.pop()!);
-      setDirty(true);
-    } else
-      await action(direction, async () => {
-        const s = await api<ProjectState>(
-          `/api/videos/${clip.id}/project/${direction}`,
-          { method: "POST" },
-        );
-        setState(s);
-        setProject(s.project);
-        setDirty(false);
-      });
+    if (!project || !(direction === "undo" ? canUndo : canRedo)) return;
+    await action(direction === "undo" ? "Undo" : "Redo", async () => {
+      // An edit that hasn't saved yet becomes its own step first.
+      if (dirty) await persist();
+      const s = await api<ProjectState>(
+        `/api/videos/${clip.id}/project/${direction}`,
+        { method: "POST" },
+      );
+      setState(s);
+      setProject(s.project);
+      setDirty(false);
+    });
   };
   const addSection = async (replace = false) => {
     if (!addId) return;
@@ -376,6 +376,7 @@ export const StudioWorkbench = forwardRef<
   };
   const publish = () =>
     action("Updating the video", async () => {
+      const sent = latest.current;
       await persist();
       const j = await api<Job>(`/api/videos/${clip.id}/render`, {
         method: "POST",
@@ -383,7 +384,13 @@ export const StudioWorkbench = forwardRef<
       });
       await awaitJob(j, setJob);
       onRendered(await api<Clip>(`/api/videos/${clip.id}`));
-      await load();
+      const s = await api<ProjectState>(`/api/videos/${clip.id}/project`);
+      setState(s);
+      // Edits made while the video was rendering stay, and save as usual.
+      if (latest.current === sent) {
+        setProject(s.project);
+        setDirty(false);
+      }
       notify(
         clip.token
           ? "Video updated. Your share link now plays this version."
@@ -400,7 +407,8 @@ export const StudioWorkbench = forwardRef<
       const el = e.target as HTMLElement;
       if (el.closest("input:not([type=range]):not([type=checkbox]),textarea"))
         return;
-      if (document.querySelector('[role="dialog"]')) return;
+      if (document.querySelector('[role="dialog"],[role="alertdialog"]'))
+        return;
       e.preventDefault();
       void historyRef.current(e.shiftKey ? "redo" : "undo");
     };
@@ -410,11 +418,23 @@ export const StudioWorkbench = forwardRef<
   if (!project || !state)
     return (
       <section className="studio-workbench">
-        <LoaderCircle className="spin" size={18} />
-        {error && (
-          <p className="error" role="alert">
-            {error}
-          </p>
+        {error ? (
+          <>
+            <p className="error" role="alert">
+              The editing tools didn’t load. {error}
+            </p>
+            <button
+              className="btn small"
+              onClick={() => {
+                setError("");
+                void load().catch((e) => setError((e as Error).message));
+              }}
+            >
+              Try again
+            </button>
+          </>
+        ) : (
+          <LoaderCircle className="spin" size={18} aria-label="Loading" />
         )}
       </section>
     );
@@ -425,6 +445,40 @@ export const StudioWorkbench = forwardRef<
     project.segments[Math.min(selected, project.segments.length - 1)];
   const sectionStart = (i: number) =>
     project.segments.slice(0, i).reduce((n, s) => n + s.end - s.start, 0);
+  // Dragging a trim handle changes the footage under later effects. When the handle
+  // is let go, they are moved to stay over the footage they were put on.
+  const settleTrim = () => {
+    const from = trimFrom.current;
+    trimFrom.current = null;
+    const now = latest.current?.segments[from?.i ?? -1];
+    if (!from || !now || now.sourceId !== from.sourceId) return;
+    const offset = sectionStart(from.i),
+      head = now.start - from.start,
+      tail = now.end - from.end;
+    if (!head && !tail) return;
+    edit((p) => {
+      // The end first, measured on the old timeline, so the two don't interfere.
+      if (tail < 0) removeSpan(p, offset + now.end - from.start, -tail);
+      if (tail > 0) insertSpan(p, offset + from.end - from.start, tail);
+      if (head > 0) removeSpan(p, offset, head);
+      if (head < 0) insertSpan(p, offset, -head);
+    });
+  };
+  const trimGesture = {
+    onPointerUp: settleTrim,
+    onKeyUp: settleTrim,
+    onBlur: settleTrim,
+  };
+  // Where a moment in some footage sits in the edited video, or null if it was cut.
+  const onTimeline = (source: string, at: number) => {
+    let t = 0;
+    for (const seg of project.segments) {
+      if (seg.sourceId === source && at >= seg.start && at < seg.end)
+        return t + at - seg.start;
+      t += seg.end - seg.start;
+    }
+    return null;
+  };
   // How long the footage behind the selected section is.
   const selectedMax = Math.max(
     selectedSection.end,
@@ -538,24 +592,24 @@ export const StudioWorkbench = forwardRef<
       )}
       <label>
         Starts at (sec)
-        <input
-          type="number"
+        <NumberField
           min={0}
           max={total}
           step=".1"
           value={o.start}
-          onChange={(e) => edit((p) => (p.overlays[i].start = +e.target.value))}
+          valid={(n) => n < o.end}
+          onCommit={(n) => edit((p) => (p.overlays[i].start = n))}
         />
       </label>
       <label>
         Ends at (sec)
-        <input
-          type="number"
+        <NumberField
           min={0}
           max={total}
           step=".1"
           value={o.end}
-          onChange={(e) => edit((p) => (p.overlays[i].end = +e.target.value))}
+          valid={(n) => n > o.start}
+          onCommit={(n) => edit((p) => (p.overlays[i].end = n))}
         />
       </label>
       {!isTitle(o.type) && (
@@ -568,14 +622,17 @@ export const StudioWorkbench = forwardRef<
             ).map((key) => (
               <label key={key}>
                 {{ x: "Left", y: "Top", w: "Width", h: "Height" }[key]} %
-                <input
-                  type="number"
+                <NumberField
                   min={key === "x" || key === "y" ? 0 : 1}
-                  max={key === "x" || key === "y" ? 95 : 100}
-                  value={Math.round(o[key] * 100)}
-                  onChange={(e) =>
-                    edit((p) => (p.overlays[i][key] = +e.target.value / 100))
+                  max={
+                    key === "x" || key === "y"
+                      ? o.type === "zoom"
+                        ? 100
+                        : 95
+                      : 100
                   }
+                  value={Math.round(o[key] * 100)}
+                  onCommit={(n) => edit((p) => (p.overlays[i][key] = n / 100))}
                 />
               </label>
             ))}
@@ -585,15 +642,12 @@ export const StudioWorkbench = forwardRef<
       {o.type === "zoom" && (
         <label>
           Zoom ×
-          <input
-            type="number"
+          <NumberField
             min={1}
             max={4}
             step=".1"
             value={o.scale}
-            onChange={(e) =>
-              edit((p) => (p.overlays[i].scale = +e.target.value))
-            }
+            onCommit={(n) => edit((p) => (p.overlays[i].scale = n))}
           />
         </label>
       )}
@@ -733,7 +787,7 @@ export const StudioWorkbench = forwardRef<
               className="icon-button"
               aria-label="Undo"
               title={`Undo (${MOD}Z)`}
-              disabled={!undo.current.length && !state.canUndo}
+              disabled={!canUndo || Boolean(busy)}
               onClick={() => void history("undo")}
             >
               <Undo2 size={17} />
@@ -742,7 +796,7 @@ export const StudioWorkbench = forwardRef<
               className="icon-button"
               aria-label="Redo"
               title={`Redo (Shift ${MOD}Z)`}
-              disabled={!redo.current.length && !state.canRedo}
+              disabled={!canRedo || Boolean(busy)}
               onClick={() => void history("redo")}
             >
               <Redo2 size={17} />
@@ -879,7 +933,9 @@ export const StudioWorkbench = forwardRef<
                 max={selectedMax}
                 step={0.05}
                 value={selectedSection.start}
+                {...trimGesture}
                 onChange={(e) => {
+                  trimFrom.current ??= { i: selected, ...selectedSection };
                   const v = Math.min(
                     +e.target.value,
                     selectedSection.end - 0.2,
@@ -897,7 +953,9 @@ export const StudioWorkbench = forwardRef<
                 max={selectedMax}
                 step={0.05}
                 value={selectedSection.end}
+                {...trimGesture}
                 onChange={(e) => {
+                  trimFrom.current ??= { i: selected, ...selectedSection };
                   const v = Math.max(
                     +e.target.value,
                     selectedSection.start + 0.2,
@@ -920,7 +978,14 @@ export const StudioWorkbench = forwardRef<
                 onClick={() => {
                   const here = playhead();
                   if (here.source < here.section.end - 0.2)
-                    edit((p) => (p.segments[here.i].start = here.source));
+                    edit((p) => {
+                      p.segments[here.i].start = here.source;
+                      removeSpan(
+                        p,
+                        sectionStart(here.i),
+                        here.source - here.section.start,
+                      );
+                    });
                   setSelected(here.i);
                 }}
               >
@@ -931,7 +996,14 @@ export const StudioWorkbench = forwardRef<
                 onClick={() => {
                   const here = playhead();
                   if (here.source > here.section.start + 0.2)
-                    edit((p) => (p.segments[here.i].end = here.source));
+                    edit((p) => {
+                      p.segments[here.i].end = here.source;
+                      removeSpan(
+                        p,
+                        sectionStart(here.i) + here.source - here.section.start,
+                        here.section.end - here.source,
+                      );
+                    });
                   setSelected(here.i);
                 }}
               >
@@ -968,10 +1040,18 @@ export const StudioWorkbench = forwardRef<
                 disabled={selected === 0}
                 onClick={() => {
                   edit((p) => {
-                    [p.segments[selected - 1], p.segments[selected]] = [
-                      p.segments[selected],
+                    const [before, moved] = [
                       p.segments[selected - 1],
+                      p.segments[selected],
                     ];
+                    p.segments[selected - 1] = moved;
+                    p.segments[selected] = before;
+                    swapSpans(
+                      p,
+                      sectionStart(selected - 1),
+                      before.end - before.start,
+                      moved.end - moved.start,
+                    );
                   });
                   setSelected(selected - 1);
                 }}
@@ -985,10 +1065,18 @@ export const StudioWorkbench = forwardRef<
                 disabled={selected === project.segments.length - 1}
                 onClick={() => {
                   edit((p) => {
-                    [p.segments[selected + 1], p.segments[selected]] = [
+                    const [moved, after] = [
                       p.segments[selected],
                       p.segments[selected + 1],
                     ];
+                    p.segments[selected] = after;
+                    p.segments[selected + 1] = moved;
+                    swapSpans(
+                      p,
+                      sectionStart(selected),
+                      moved.end - moved.start,
+                      after.end - after.start,
+                    );
                   });
                   setSelected(selected + 1);
                 }}
@@ -1000,7 +1088,14 @@ export const StudioWorkbench = forwardRef<
                 className="btn small danger"
                 disabled={project.segments.length === 1}
                 onClick={() => {
-                  edit((p) => p.segments.splice(selected, 1));
+                  edit((p) => {
+                    const [gone] = p.segments.splice(selected, 1);
+                    removeSpan(
+                      p,
+                      sectionStart(selected),
+                      gone.end - gone.start,
+                    );
+                  });
                   setSelected(Math.max(0, selected - 1));
                 }}
               >
@@ -1063,7 +1158,11 @@ export const StudioWorkbench = forwardRef<
                     className="text-button"
                     onClick={(e) => {
                       e.preventDefault();
-                      onSeek(Math.max(0, s.start - 1));
+                      // Suggestions are timed on the footage, not the edit.
+                      const at = onTimeline(s.sourceId, s.start);
+                      if (at === null)
+                        notify("That part has already been cut.");
+                      else onSeek(Math.max(0, at - 1));
                     }}
                   >
                     <Play size={12} />
@@ -1291,18 +1390,8 @@ export const StudioWorkbench = forwardRef<
                               : [...wordSelection, i],
                           );
                         }
-                        let t = 0;
-                        for (const seg of project.segments) {
-                          if (
-                            seg.sourceId === sourceId &&
-                            w.start >= seg.start &&
-                            w.start < seg.end
-                          ) {
-                            onSeek(t + w.start - seg.start);
-                            break;
-                          }
-                          t += seg.end - seg.start;
-                        }
+                        const at = onTimeline(sourceId, w.start);
+                        if (at !== null) onSeek(at);
                       }}
                       onDoubleClick={() => setEditingWord(i)}
                     >
@@ -1422,8 +1511,6 @@ export const StudioWorkbench = forwardRef<
               project={project}
               total={total}
               edit={edit}
-              previewing={previewing}
-              setPreviewing={setPreviewing}
               now={at}
             >
               <label>
@@ -1435,6 +1522,10 @@ export const StudioWorkbench = forwardRef<
                     edit((p) => {
                       p.layout.width = w;
                       p.layout.height = h;
+                      p.layout.padding = Math.min(
+                        p.layout.padding,
+                        Math.floor(Math.min(w, h) / 3),
+                      );
                     });
                   }}
                 >
@@ -1484,8 +1575,6 @@ export const StudioWorkbench = forwardRef<
                 project={project}
                 total={total}
                 edit={edit}
-                previewing={previewing}
-                setPreviewing={setPreviewing}
                 now={at}
               />
               <div className="look-fields camera-fields">

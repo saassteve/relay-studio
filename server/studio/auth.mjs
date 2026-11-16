@@ -35,10 +35,13 @@ export function createAuth({ app, db, password, rateLimit }) {
       new Date().toISOString(),
     );
     root = db.prepare("SELECT * FROM members WHERE id='owner'").get();
-  } else if (password && !passwordMatches(password, root.password))
+  } else if (password && !passwordMatches(password, root.password)) {
     db.prepare("UPDATE members SET password=? WHERE id='owner'").run(
       passwordHash(password),
     );
+    // A new ADMIN_PASSWORD signs the owner out wherever the old one was used.
+    db.prepare("DELETE FROM member_sessions WHERE member_id='owner'").run();
+  }
   const attach = (req, res, next) => {
     const key = req.headers.cookie?.match(
       /(?:^|;\s*)relay_session=([a-f0-9]{64})(?:;|$)/,
@@ -74,7 +77,13 @@ export function createAuth({ app, db, password, rateLimit }) {
         .status(403)
         .json({ error: "Your workspace role is view-only." });
     if (req.user.role === "viewer") {
-      const lower = req.path.toLowerCase();
+      // Express decodes the :id in a route, so these checks read the path decoded too.
+      let lower;
+      try {
+        lower = decodeURIComponent(req.path).toLowerCase();
+      } catch {
+        return res.status(400).json({ error: "That address isn’t valid." });
+      }
       if (
         /^\/api\/(jobs|recordings)(\/|$)/.test(lower) ||
         /^\/api\/videos\/[^/]+\/(project(?:[/.]|$)|tracks(?:\/|$)|transcript(?:\/|$)|focus-suggestions|analytics)/.test(
@@ -85,9 +94,13 @@ export function createAuth({ app, db, password, rateLimit }) {
           error:
             "Source footage and editing projects are restricted to workspace editors.",
         });
-      const id = lower.match(
-        /^\/api\/(?:videos|media)\/([a-f0-9-]{36})(?:[/.]|$)/,
-      )?.[1];
+      // The id the route itself will use, when this is a route for one video.
+      const id = /^\/api\/(?:videos|media)\//.test(lower)
+        ? req.params?.id ||
+          lower.match(
+            /^\/api\/(?:videos|media)\/([a-f0-9-]{36})(?:[/.]|$)/,
+          )?.[1]
+        : null;
       const row =
           id &&
           db.prepare("SELECT share_config FROM videos WHERE id=?").get(id),
@@ -250,6 +263,10 @@ export function createAuth({ app, db, password, rateLimit }) {
       throw problem(409, "That person is already in this workspace.");
     const token = randomBytes(24).toString("base64url"),
       expires = Date.now() + 7 * 86400000;
+    // Inviting someone again replaces the link they were sent before.
+    db.prepare("DELETE FROM invitations WHERE email=? AND accepted=0").run(
+      email,
+    );
     db.prepare("INSERT INTO invitations VALUES(?,?,?,?,?,0)").run(
       token,
       email,
@@ -299,7 +316,9 @@ export function createAuth({ app, db, password, rateLimit }) {
       db.exec("COMMIT");
     } catch (e) {
       db.exec("ROLLBACK");
-      throw e;
+      throw /UNIQUE constraint/.test(e.message)
+        ? problem(409, "That person is already in this workspace.")
+        : e;
     }
     login(res, id);
     res.status(201).json({

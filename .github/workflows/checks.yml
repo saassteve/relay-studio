@@ -1,5 +1,7 @@
 name: Relay checks
 on: [push, pull_request]
+permissions:
+  contents: read
 jobs:
   studio:
     runs-on: ubuntu-latest
@@ -10,6 +12,15 @@ jobs:
         with:
           node-version: 26
           cache: npm
+      # The desktop shell and the release scripts only run on a Mac, so at least
+      # make sure they parse.
+      - name: Syntax-check the desktop shell and scripts
+        run: |
+          for f in desktop/*.cjs desktop/*.js desktop/*.mjs electron-builder.config.cjs; do
+            node --check "$f"
+          done
+          sh -n install.sh
+          sh -n scripts/release-mac.sh
       - run: npm ci
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'

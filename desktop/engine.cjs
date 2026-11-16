@@ -3,6 +3,7 @@ const { execFileSync } = require("node:child_process");
 const { createHash } = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
+const { secure, lock } = require("./windows.cjs");
 
 // Relay's download ships only MIT-licensed code. On first launch it fetches a pinned,
 // checksum-verified GPL FFmpeg build directly from its publisher into the user's
@@ -57,21 +58,38 @@ function usable(binary) {
 }
 
 async function download(target, onProgress) {
-  const response = await fetch(target.spec.url, {
-    signal: AbortSignal.timeout(300000),
-  });
-  if (!response.ok || !response.body)
-    throw new Error(`The download server answered ${response.status}.`);
-  const total = Number(response.headers.get("content-length")) || 0;
+  // A slow connection may take as long as it needs; only a stalled one gives up.
+  const stalled = new AbortController();
+  let timer;
+  const alive = () => {
+    clearTimeout(timer);
+    timer = setTimeout(
+      () =>
+        stalled.abort(
+          new Error("The download stalled. Check your connection."),
+        ),
+      30000,
+    );
+  };
   const hash = createHash("sha256");
   const chunks = [];
-  let received = 0;
-  for await (const chunk of response.body) {
-    const buffer = Buffer.from(chunk);
-    hash.update(buffer);
-    chunks.push(buffer);
-    received += buffer.length;
-    onProgress(total ? received / total : 0, received, total);
+  try {
+    alive();
+    const response = await fetch(target.spec.url, { signal: stalled.signal });
+    if (!response.ok || !response.body)
+      throw new Error(`The download server answered ${response.status}.`);
+    const total = Number(response.headers.get("content-length")) || 0;
+    let received = 0;
+    for await (const chunk of response.body) {
+      alive();
+      const buffer = Buffer.from(chunk);
+      hash.update(buffer);
+      chunks.push(buffer);
+      received += buffer.length;
+      onProgress(total ? received / total : 0, received, total);
+    }
+  } finally {
+    clearTimeout(timer);
   }
   if (hash.digest("hex") !== target.spec.sha256)
     throw new Error("The video engine failed its integrity check.");
@@ -92,7 +110,9 @@ async function download(target, onProgress) {
 
 // Resolves to an FFmpeg path, showing a small setup window the first time.
 module.exports = async function ensureEngine() {
-  // An override is for development; the packaged app only runs its verified engine.
+  // FFMPEG_BIN is honoured in development only. The packaged app runs the engine it
+  // downloaded: the checksum was verified at download time, and each launch only
+  // re-checks that the binary runs and reports no nonfree parts.
   if (process.env.FFMPEG_BIN && !app.isPackaged) return process.env.FFMPEG_BIN;
   const dev = !app.isPackaged && bundledForDevelopment();
   if (dev) return dev;
@@ -111,15 +131,9 @@ module.exports = async function ensureEngine() {
     backgroundColor: "#173e32",
     title: "Setting up Relay",
     show: false,
-    webPreferences: {
-      preload: path.join(__dirname, "overlay-preload.cjs"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
+    webPreferences: secure("overlay-preload.cjs"),
   });
-  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  win.webContents.on("will-navigate", (e) => e.preventDefault());
+  lock(win);
   let finished = false;
   // Closing the setup window before it finishes quits Relay.
   win.on("closed", () => {

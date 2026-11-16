@@ -1,5 +1,6 @@
 // Providers that speak the OpenAI-style chat completions API: the free tiers
-// (Gemini, Groq, OpenRouter), OpenAI itself, a local Ollama, or any custom endpoint.
+// (Gemini, Groq, OpenRouter), OpenAI itself, and an Ollama server at an address
+// the workspace chooses.
 import { problem } from "../schema.mjs";
 import { JSON_SCHEMA, SYSTEM } from "./schema.mjs";
 
@@ -36,20 +37,41 @@ function explain(provider, status, body) {
 }
 
 async function request(provider, baseURL, apiKey, pathname, init) {
+  // A model on someone's own machine can take minutes to write a whole reply.
+  const limit = provider.local && init.method === "POST" ? 900000 : 120000;
+  const slow = (e) => {
+    if (e?.name !== "TimeoutError") return null;
+    return problem(
+      504,
+      `${provider.label} took more than ${limit / 60000} minutes to answer. ${provider.local ? "Try a smaller model or a shorter video." : "Try again in a moment."}`,
+    );
+  };
   let response;
   try {
     response = await fetch(join(baseURL, pathname), {
       ...init,
       headers: headers(provider, apiKey),
-      signal: AbortSignal.timeout(120000),
+      // A server at an address someone typed in must not send Relay on to
+      // another one, such as a machine inside the network.
+      redirect: provider.local ? "error" : "follow",
+      signal: AbortSignal.timeout(limit),
     });
-  } catch {
+  } catch (e) {
+    if (slow(e)) throw slow(e);
+    if (/redirect/i.test(e?.cause?.message || ""))
+      throw problem(
+        502,
+        `${provider.label} answered with a redirect to another address, which Relay does not follow. Enter the server's own address.`,
+      );
     throw problem(
       503,
       `Couldn't reach ${provider.label}. Check your connection${provider.id === "ollama" ? " and that Ollama is running" : ""}.`,
     );
   }
-  const body = await response.json().catch(() => null);
+  const body = await response.json().catch((e) => {
+    if (slow(e)) throw slow(e);
+    return null;
+  });
   return { response, body };
 }
 

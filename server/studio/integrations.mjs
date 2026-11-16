@@ -301,4 +301,5 @@ export function registerIntegrations({
       throw problem(502, "The configured webhook rejected this event.");
     res.json({ ok: true });
   });
+  return { check };
 }

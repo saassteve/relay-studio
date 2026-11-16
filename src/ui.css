@@ -1227,16 +1227,16 @@ textarea {
   outline-offset: 2px;
 }
 :is(
-    input:not(
-        [type="checkbox"],
-        [type="radio"],
-        [type="range"],
-        [type="color"],
-        [type="file"]
-      ),
-    select,
-    textarea
-  ):not(.editable-title, .watch-speed, .search-box input) {
+  input:not(
+    [type="checkbox"],
+    [type="radio"],
+    [type="range"],
+    [type="color"],
+    [type="file"]
+  ),
+  select,
+  textarea
+):not(.editable-title, .watch-speed, .search-box input) {
   min-height: var(--control);
   border: 1px solid #8a957f !important;
   border-radius: var(--radius-control) !important;
@@ -1311,8 +1311,7 @@ summary {
 summary::-webkit-details-marker {
   display: none;
 }
-:is(.cut-more, .recorder-more, .transcript-public)
-  > summary {
+:is(.cut-more, .recorder-more, .transcript-public) > summary {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1321,8 +1320,7 @@ summary::-webkit-details-marker {
   font-weight: 600;
   color: var(--ink-2);
 }
-:is(.cut-more, .recorder-more, .transcript-public)
-  > summary::before {
+:is(.cut-more, .recorder-more, .transcript-public) > summary::before {
   content: "";
   width: 12px;
   height: 12px;
@@ -1331,8 +1329,7 @@ summary::-webkit-details-marker {
     center / contain no-repeat;
   transition: transform 0.15s;
 }
-:is(.cut-more, .recorder-more, .transcript-public)[open]
-  > summary::before {
+:is(.cut-more, .recorder-more, .transcript-public)[open] > summary::before {
   transform: rotate(90deg);
 }
 
@@ -2015,16 +2012,16 @@ summary::-webkit-details-marker {
 /* Touch: every control is a comfortable size, and typing never zooms the page. */
 @media (pointer: coarse) {
   :is(
-      input:not(
-          [type="checkbox"],
-          [type="radio"],
-          [type="range"],
-          [type="color"],
-          [type="file"]
-        ),
-      select,
-      textarea
-    ):not(.editable-title, .watch-speed, .search-box input) {
+    input:not(
+      [type="checkbox"],
+      [type="radio"],
+      [type="range"],
+      [type="color"],
+      [type="file"]
+    ),
+    select,
+    textarea
+  ):not(.editable-title, .watch-speed, .search-box input) {
     font-size: 16px !important;
     min-height: 44px;
   }
@@ -2421,7 +2418,8 @@ main[tabindex="-1"]:focus-visible {
 }
 /* Look tab: one field size, even gaps. */
 .look-card .effect-row input:not([type="color"]),
-.look-fields input:not([type="checkbox"]):not([type="range"]):not([type="color"]),
+.look-fields
+  input:not([type="checkbox"]):not([type="range"]):not([type="color"]),
 .look-fields select {
   min-height: var(--control);
   height: var(--control);
@@ -2504,7 +2502,9 @@ main[tabindex="-1"]:focus-visible {
 .look-card h2,
 .assist-card h2,
 .generated-outline h2 {
-  font: 700 15px/1.35 "DM Sans", sans-serif;
+  font:
+    700 15px/1.35 "DM Sans",
+    sans-serif;
   letter-spacing: 0;
   color: var(--ink);
   margin: 0;
@@ -2672,4 +2672,77 @@ main[tabindex="-1"]:focus-visible {
 .dialog-footer .small a {
   color: inherit;
   font-weight: 600;
+}
+
+/* Links that work anywhere */
+.cloud-form {
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+  max-width: 520px;
+}
+.cloud-form .field {
+  width: 100%;
+}
+.cloud-connected {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.cloud-connected > span {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+.cloud-connected small {
+  color: var(--muted, #5c685f);
+}
+.share-connect {
+  margin: 12px 0 0;
+}
+.share-dialog .share-actions .text-button.danger {
+  margin-left: auto;
+}
+[data-settings] {
+  scroll-margin-top: 72px;
+}
+.studio-hint a {
+  color: var(--pine, #173e32);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.cloud-form .field {
+  margin: 0;
+}
+.sign-out {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: calc(100% + 16px);
+  margin: 0 -8px;
+  padding: 9px 8px;
+  border-radius: 10px;
+  font-size: 13px;
+  color: var(--ink-2);
+  text-align: left;
+}
+.sign-out:hover {
+  background: #e9eee2;
+}
+.rec-notice.is-warning {
+  background: #f8ede5;
+  color: #9d533c;
+}
+.screen-blocked p {
+  margin: 0 0 8px;
+}
+.screen-blocked .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }

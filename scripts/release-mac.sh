@@ -14,6 +14,9 @@
 #
 # Other teams: set RELAY_TEAM_ID to your team ID, and RELAY_NOTARY_PROFILE if you
 # saved the credentials under another name.
+#
+# A release is built from committed code. Set RELAY_RELEASE_DIRTY=1 to build with
+# uncommitted changes anyway.
 set -eu
 
 PROFILE="${RELAY_NOTARY_PROFILE:-relay-notary}"
@@ -23,12 +26,23 @@ ROOT="$(pwd)"
 VERSION="$(node -p "require('./package.json').version")"
 BUNDLE_ID="org.relayvideo.studio"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/relay-release.XXXXXX")"
-trap 'rm -rf "$WORK"' EXIT
+# The download being packaged, until it has passed its checks.
+UNVERIFIED=""
+cleanup() {
+  rm -rf "$WORK"
+  # A file that failed, or never reached, its checks must not be left in release/
+  # looking finished.
+  [ -z "$UNVERIFIED" ] || rm -f "$UNVERIFIED.dmg" "$UNVERIFIED.zip"
+}
+trap cleanup EXIT
 
 fail() {
   printf '\n✗ %s\n' "$1" >&2
   exit 1
 }
+
+[ "${RELAY_RELEASE_DIRTY:-}" = "1" ] || git diff --quiet HEAD ||
+  fail "There are uncommitted changes to tracked files. Commit or stash them, or set RELAY_RELEASE_DIRTY=1 to release anyway."
 
 xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null 2>&1 ||
   fail "No working notary credentials under \"$PROFILE\". See the top of scripts/release-mac.sh."
@@ -93,6 +107,15 @@ EOF
   SIGNED="$WORK/$ARCH/out/Relay.app"
   codesign --verify --deep --strict "$SIGNED"
   audit "$SIGNED"
+  # Xcode has just re-signed the app. Without these it cannot run its JavaScript
+  # engine or ask for the camera and microphone.
+  codesign -d --entitlements - --xml "$SIGNED" >"$WORK/$ARCH/entitlements.plist" 2>/dev/null ||
+    fail "Could not read the entitlements of the signed $ARCH app."
+  for KEY in com.apple.security.cs.allow-jit com.apple.security.device.camera \
+    com.apple.security.device.audio-input; do
+    [ "$(/usr/libexec/PlistBuddy -c "Print :$KEY" "$WORK/$ARCH/entitlements.plist" 2>/dev/null)" = "true" ] ||
+      fail "The signed $ARCH app lost its $KEY entitlement."
+  done
 
   echo "→ Notarizing the $ARCH app (Apple usually answers within a few minutes)"
   ditto -c -k --keepParent "$SIGNED" "$WORK/$ARCH/Relay.zip"
@@ -106,6 +129,7 @@ EOF
   spctl --assess --type execute --verbose=2 "$APP"
 
   echo "→ Packaging the $ARCH download"
+  UNVERIFIED="release/Relay-mac-$ARCH"
   ditto -c -k --sequesterRsrc --keepParent "$APP" "release/Relay-mac-$ARCH.zip"
   # The disk image is built around the finished app; nothing is signed again.
   CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --config electron-builder.config.cjs \
@@ -122,6 +146,7 @@ EOF
     fail "The app inside the $ARCH disk image is not the notarized one."
   }
   hdiutil detach -quiet "$MOUNT"
+  UNVERIFIED=""
 }
 
 sign_and_notarize mac-arm64 arm64 arm64

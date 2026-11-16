@@ -41,11 +41,17 @@ function roundRect(x, y, w, h, r) {
     `b ${f(x)} ${f(y + r - k)} ${f(x + r - k)} ${f(y)} ${f(x + r)} ${f(y)}`,
   ].join(" ");
 }
+// Chinese, Japanese and Korean characters and emoji are about as wide as they are tall.
+const WIDE =
+  /[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6]|\p{Extended_Pictographic}/u;
 // Rough text width; the shapes behind text are padded to allow for the error.
 const textWidth = (text, size, bold) =>
-  String(text).length * size * (bold ? 0.52 : 0.47);
+  [...String(text)].reduce(
+    (n, character) => n + (WIDE.test(character) ? 1 : bold ? 0.52 : 0.47),
+    0,
+  ) * size;
 
-function captionEvents(words, style, H) {
+function captionEvents(words, style) {
   const events = [];
   if (style === "highlight") {
     // Short groups of words, with the one being spoken lit up.
@@ -87,7 +93,6 @@ function captionEvents(words, style, H) {
         style === "bold" ? clean(cue.text).toUpperCase() : clean(cue.text)
       }`,
     );
-  void H;
   return events;
 }
 
@@ -191,7 +196,6 @@ export function buildASS({
       ...captionEvents(
         words,
         CAPTION_STYLES.includes(captionStyle) ? captionStyle : "clean",
-        H,
       ),
     );
   for (const o of overlays)

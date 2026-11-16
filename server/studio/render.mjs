@@ -1,6 +1,35 @@
+import { execFile, spawn } from "node:child_process";
+import {
+  createReadStream,
+  createWriteStream,
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import path from "node:path";
+import { pipeline } from "node:stream/promises";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import ffmpeg from "../ffmpeg.mjs";
 import { zoomFilter } from "./autozoom.mjs";
 import { createArtwork, planLayout } from "./compose.mjs";
+import { outputWords } from "./project.mjs";
+import { parseJSON, problem } from "./schema.mjs";
 import { buildASS, TITLE_TYPES } from "./titles.mjs";
+
+const run = promisify(execFile);
+// Every render is 30 frames a second with 48 kHz sound: 1600 samples a frame.
+const FPS = 30,
+  RATE = 48000;
+// Fonts ship in public/ from source and in dist/ in production images.
+const appRoot = fileURLToPath(new URL("../..", import.meta.url));
+const fontsDir =
+  ["public/fonts", "dist/fonts"]
+    .map((p) => path.join(appRoot, p))
+    .find((p) => existsSync(p)) || path.join(appRoot, "public/fonts");
 
 // Splits a section into stretches that each use one layout.
 export function layoutPieces(scenes, offset, length, base) {
@@ -33,29 +62,6 @@ export function layoutPieces(scenes, offset, length, base) {
   }
   return pieces;
 }
-import { existsSync as exists } from "node:fs";
-import { fileURLToPath } from "node:url";
-// Fonts ship in public/ from source and in dist/ in production images.
-const appRoot = fileURLToPath(new URL("../..", import.meta.url));
-const fontsDir =
-  ["public/fonts", "dist/fonts"]
-    .map((p) => path.join(appRoot, p))
-    .find((p) => exists(p)) || path.join(appRoot, "public/fonts");
-import ffmpeg from "../ffmpeg.mjs";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import {
-  mkdtempSync,
-  writeFileSync,
-  readFileSync,
-  rmSync,
-  existsSync,
-  statSync,
-} from "node:fs";
-import path from "node:path";
-import { parseJSON, problem } from "./schema.mjs";
-import { captions, outputWords } from "./project.mjs";
-const run = promisify(execFile);
 export async function probe(file) {
   try {
     await run(ffmpeg, ["-hide_banner", "-i", file], { maxBuffer: 1024 * 1024 });
@@ -81,7 +87,96 @@ export async function probe(file) {
 }
 export const filterPath = (p) =>
   p.replaceAll("\\", "/").replaceAll(":", "\\:").replaceAll("'", "'\\''");
+
+// Runs FFmpeg. A long or large video may take hours, so there is no time limit:
+// it is stopped only when nothing it reports has moved for several minutes.
+export function engine(args, { stall = 600000, log = "error" } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      ffmpeg,
+      [
+        "-hide_banner",
+        "-loglevel",
+        log,
+        "-nostdin",
+        "-nostats",
+        "-progress",
+        "pipe:1",
+        ...args,
+      ],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    const seen = {};
+    let stderr = "",
+      pending = "",
+      stalled = false,
+      timer;
+    const watch = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        stalled = true;
+        child.kill("SIGKILL");
+      }, stall);
+    };
+    watch();
+    child.stdout.on("data", (data) => {
+      const lines = (pending + data).split("\n");
+      pending = lines.pop();
+      let moved = false;
+      for (const line of lines) {
+        const [key, value] = line.split("=");
+        if (
+          ["frame", "out_time", "out_time_us", "total_size"].includes(key) &&
+          seen[key] !== value
+        ) {
+          seen[key] = value;
+          moved = true;
+        }
+      }
+      if (moved) watch();
+    });
+    child.stderr.on(
+      "data",
+      (data) => (stderr = (stderr + data).slice(-4 * 1024 * 1024)),
+    );
+    child.on("error", (e) => {
+      clearTimeout(timer);
+      reject(e);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (stalled)
+        reject(
+          problem(
+            504,
+            "This video took too long to process: the media engine stopped making progress. Try again, or export a shorter or smaller video.",
+          ),
+        );
+      else if (code === 0) resolve({ stderr });
+      else
+        reject(
+          Object.assign(
+            new Error(`Command failed: ${ffmpeg} ${args.join(" ")}\n${stderr}`),
+            { code, stderr },
+          ),
+        );
+    });
+  });
+}
+// Working folders left in tmp/ by a job that was cut short when Relay quit.
+export function sweep(dataDir, ...prefixes) {
+  const tmp = path.join(dataDir, "tmp");
+  try {
+    for (const name of readdirSync(tmp))
+      if (prefixes.some((p) => name.startsWith(p)))
+        rmSync(path.join(tmp, name), { recursive: true, force: true });
+  } catch {
+    /* Nothing to clear. */
+  }
+}
+
 export function createRenderer({ db, dataDir, find }) {
+  sweep(dataDir, "render-");
   const media = (f) => path.join(dataDir, "media", f);
   const assetsFor = (v) => {
     let assets = db.prepare("SELECT * FROM assets WHERE video_id=?").all(v.id);
@@ -130,30 +225,37 @@ export function createRenderer({ db, dataDir, find }) {
       "-threads",
       "2",
     ];
-    const exec = (args) =>
-      run(ffmpeg, args, { timeout: 1800000, maxBuffer: 2 * 1024 * 1024 });
-    // Renders one stretch of a section in a single layout.
+    const exec = (args) => engine(["-y", ...args]);
+    // The whole soundtrack as plain samples. It is joined section by section
+    // and only encoded once, at the end.
+    const soundtrack = path.join(temp, "sound.pcm"),
+      pcm = ["-f", "s16le", "-ar", String(RATE), "-ac", "2"];
+    // Renders one stretch of a section in a single layout: `frames` of picture
+    // to `out`, and `samples` of sound to `sound`. Either can be left out.
     async function piece({
       byRole,
       primary,
       aspect,
       from,
-      d,
-      zooms,
+      frames = 0,
+      samples = 0,
+      zooms = [],
       preset,
-      withVideo = true,
-      withAudio = true,
       crf = 21,
       out,
+      sound,
     }) {
-      const args = ["-hide_banner", "-loglevel", "error", "-nostdin", "-y"];
+      const args = [],
+        d = frames / FPS;
       let index = 0;
-      const input = (asset) => {
+      // A recording has no frames while its picture is still, so one that is
+      // cut partway cannot be read from the cut onwards. Reading starts at the
+      // keyframe before it, and `fps` below keeps the frame that was showing.
+      const picture = (asset) => {
         args.push(
+          "-noaccurate_seek",
           "-ss",
           String(from),
-          "-t",
-          String(d),
           "-i",
           media(asset.filename),
         );
@@ -164,18 +266,31 @@ export function createRenderer({ db, dataDir, find }) {
           "-loop",
           "1",
           "-framerate",
-          "30",
+          String(FPS),
           "-t",
-          String(d),
+          String((frames + 0.5) / FPS),
           "-i",
           file,
         );
         return index++;
       };
+      // A little more sound than needed is read, then cut to the sample.
+      const audible = (asset) => {
+        args.push(
+          "-ss",
+          String(from),
+          "-t",
+          String(samples / RATE + 0.1),
+          "-i",
+          media(asset.filename),
+        );
+        return index++;
+      };
+      // Exactly `frames` frames at a steady rate, starting at the cut.
+      const steady = `fps=${FPS}:start_time=0,tpad=stop_mode=clone:stop_duration=${(d + 1).toFixed(3)},trim=end_frame=${frames}`;
       const graph = [];
-      const maps = [];
       const cameraAsset = byRole.screen && byRole.camera ? byRole.camera : null;
-      if (withVideo) {
+      if (frames) {
         const plan = planLayout(l, preset, aspect, Boolean(cameraAsset));
         const onBackground = [
           plan.screen,
@@ -188,7 +303,7 @@ export function createRenderer({ db, dataDir, find }) {
           ),
         );
         graph.push(
-          `[${bg}:v]fps=30,format=rgb24,setsar=1,trim=duration=${d}[bg]`,
+          `[${bg}:v]fps=${FPS},format=rgb24,setsar=1,trim=end_frame=${frames}[bg]`,
         );
         let last = "bg";
         const rounded = async (label, box) => {
@@ -196,17 +311,17 @@ export function createRenderer({ db, dataDir, find }) {
           const m = still(await art.mask(box));
           graph.push(
             `[${label}]format=rgba[${label}c]`,
-            `[${m}:v]fps=30,format=gray[${label}m]`,
+            `[${m}:v]fps=${FPS},format=gray[${label}m]`,
             `[${label}c][${label}m]alphamerge[${label}r]`,
           );
           return `${label}r`;
         };
         if (plan.screen) {
           const b = plan.screen,
-            pi = input(primary),
+            pi = picture(primary),
             zoom = zoomFilter(zooms, b.w, b.h);
           graph.push(
-            `[${pi}:v]setpts=PTS-STARTPTS,scale=${b.w}:${b.h},setsar=1,fps=30,tpad=stop_mode=clone:stop_duration=${d},trim=duration=${d}${zoom ? `,${zoom}` : ""}[scr]`,
+            `[${pi}:v]scale=${b.w}:${b.h},setsar=1,${steady}${zoom ? `,${zoom}` : ""}[scr]`,
           );
           const label = await rounded("scr", b);
           graph.push(
@@ -216,7 +331,7 @@ export function createRenderer({ db, dataDir, find }) {
         }
         if (plan.camera) {
           const b = plan.camera,
-            ci = input(cameraAsset);
+            ci = picture(cameraAsset);
           if (plan.preset === "pip" && art.hasShadow) {
             const sh = still(await art.shadow(b));
             graph.push(
@@ -225,7 +340,7 @@ export function createRenderer({ db, dataDir, find }) {
             last = "withshadow";
           }
           graph.push(
-            `[${ci}:v]setpts=PTS-STARTPTS,scale=${b.w}:${b.h}:force_original_aspect_ratio=increase,crop=${b.w}:${b.h},setsar=1,fps=30,tpad=stop_mode=clone:stop_duration=${d},trim=duration=${d}[cam]`,
+            `[${ci}:v]scale=${b.w}:${b.h}:force_original_aspect_ratio=increase,crop=${b.w}:${b.h},setsar=1,${steady}[cam]`,
           );
           const label = await rounded("cam", b);
           graph.push(
@@ -234,42 +349,85 @@ export function createRenderer({ db, dataDir, find }) {
           last = "withcamera";
         }
         graph.push(`[${last}]format=yuv420p[video]`);
-        maps.push("-map", "[video]");
       }
-      if (withAudio) {
-        const audio = [];
+      if (samples) {
+        const audio = [],
+          exact = `apad,atrim=end_sample=${samples}`;
         if (byRole.microphone && l.audio.microphone > 0)
           audio.push({
-            index: input(byRole.microphone),
+            index: audible(byRole.microphone),
             gain: l.audio.microphone,
           });
         if (byRole.system && l.audio.system > 0)
-          audio.push({ index: input(byRole.system), gain: l.audio.system });
+          audio.push({ index: audible(byRole.system), gain: l.audio.system });
         if (
           !audio.length &&
           (await info(primary)).hasAudio &&
           l.audio.microphone > 0
         )
-          audio.push({ index: input(primary), gain: l.audio.microphone });
+          audio.push({ index: audible(primary), gain: l.audio.microphone });
         if (audio.length) {
           audio.forEach((a, i) =>
             graph.push(
-              `[${a.index}:a]asetpts=PTS-STARTPTS,aresample=48000,volume=${a.gain}${l.audio.denoise ? ",afftdn=nf=-25" : ""},apad,atrim=duration=${d}[a${i}]`,
+              `[${a.index}:a]asetpts=PTS-STARTPTS,aresample=${RATE},volume=${a.gain}${l.audio.denoise ? ",afftdn=nf=-25" : ""},${exact}[a${i}]`,
             ),
           );
           graph.push(
-            `${audio.map((_, i) => `[a${i}]`).join("")}amix=inputs=${audio.length}:normalize=0${l.audio.normalize ? ",loudnorm=I=-16:TP=-1.5:LRA=11" : ""},aresample=48000,apad,atrim=duration=${d}[audio]`,
+            `${audio.map((_, i) => `[a${i}]`).join("")}amix=inputs=${audio.length}:normalize=0,aresample=${RATE},${exact}[audio]`,
           );
         } else
-          graph.push(`anullsrc=r=48000:cl=stereo,atrim=duration=${d}[audio]`);
-        maps.push("-map", "[audio]");
+          graph.push(
+            `anullsrc=r=${RATE}:cl=stereo,atrim=end_sample=${samples}[audio]`,
+          );
       }
-      args.push("-filter_complex", graph.join(";"), ...maps, "-t", String(d));
-      if (withVideo) args.push(...encode(crf));
-      if (withAudio) args.push("-c:a", "aac", "-ar", "48000", "-ac", "2");
-      args.push(out);
+      args.push("-filter_complex", graph.join(";"));
+      if (frames)
+        args.push(
+          "-map",
+          "[video]",
+          "-frames:v",
+          String(frames),
+          ...encode(crf),
+          out,
+        );
+      if (samples)
+        args.push("-map", "[audio]", "-c:a", "pcm_s16le", ...pcm, sound);
       await exec(args);
-      return out;
+    }
+    // Loudness is measured once over the finished soundtrack and corrected in
+    // one go, so a short section is treated like the ones around it.
+    async function loudness() {
+      const target = "loudnorm=I=-16:TP=-1.5:LRA=11",
+        { stderr } = await engine(
+          [
+            ...pcm,
+            "-i",
+            soundtrack,
+            "-af",
+            `aformat=channel_layouts=stereo,${target}:print_format=json`,
+            "-f",
+            "null",
+            "-",
+          ],
+          { log: "info" },
+        ),
+        found = parseJSON(stderr.match(/\{[^{}]*\}/g)?.at(-1), {}),
+        measured = [
+          ["measured_I", "input_i", -99, 0],
+          ["measured_TP", "input_tp", -99, 99],
+          ["measured_LRA", "input_lra", 0, 99],
+          ["measured_thresh", "input_thresh", -99, 0],
+          ["offset", "target_offset", -99, 99],
+        ].map(([name, key, min, max]) => [
+          name,
+          Math.min(max, Math.max(min, Number(found[key]))),
+        ]);
+      // Silence has no loudness to correct.
+      if (!measured.every(([, value]) => Number.isFinite(value))) return [];
+      return [
+        `${target}:${measured.map((m) => m.join("=")).join(":")}`,
+        `aresample=${RATE}`,
+      ];
     }
     try {
       const parts = [];
@@ -281,35 +439,43 @@ export function createRenderer({ db, dataDir, find }) {
           byRole = Object.fromEntries(assets.map((a) => [a.role, a]));
         const primary = byRole.screen || byRole.primary || byRole.camera;
         if (!primary) throw problem(400, "A source recording is missing.");
-        const d = s.end - s.start,
+        // Sections are cut to whole frames and whole samples of the finished
+        // video, measured from its start, so rounding never adds up from one
+        // section to the next and everything timed stays where it was put.
+        const end = offset + s.end - s.start,
+          first = Math.round(offset * FPS),
+          frames = Math.round(end * FPS) - first,
+          samples = Math.round(end * RATE) - Math.round(offset * RATE),
+          at = first / FPS,
+          d = frames / FPS,
           shape = await info(primary),
           aspect = (shape.width || 16) / (shape.height || 9),
-          target = path.join(temp, `segment-${n}.mp4`);
+          target = path.join(temp, `segment-${n}.mp4`),
+          // The first section starts the soundtrack; the rest are added to it.
+          sound = n ? path.join(temp, `segment-${n}.pcm`) : soundtrack;
         // Zooms act on the screen layer only, so the camera stays put.
         const zoomsFor = (local, length) =>
           (project.overlays || [])
             .filter((o) => o.type === "zoom")
             .map((o) => ({
               ...o,
-              start: o.start - offset - local,
-              end: o.end - offset - local,
+              start: o.start - at - local,
+              end: o.end - at - local,
             }))
             .filter((o) => o.end > 0 && o.start < length);
-        const pieces = layoutPieces(
-          project.scenes || [],
-          offset,
-          d,
-          l.preset || "pip",
-        );
-        const common = { byRole, primary, aspect };
-        if (pieces.length === 1)
+        const pieces = frames
+          ? layoutPieces(project.scenes || [], at, d, l.preset || "pip")
+          : [];
+        const common = { byRole, primary, aspect, from: s.start };
+        if (pieces.length < 2)
           await piece({
             ...common,
-            from: s.start,
-            d,
+            frames,
+            samples,
             zooms: zoomsFor(0, d),
-            preset: pieces[0].preset,
+            preset: pieces[0]?.preset,
             out: target,
+            sound,
           });
         else {
           // Each layout overlaps the next briefly, then they are blended, so the
@@ -321,31 +487,25 @@ export function createRenderer({ db, dataDir, find }) {
           const files = [];
           for (let i = 0; i < pieces.length; i++) {
             const p = pieces[i],
-              length = p.end - p.start + (i < pieces.length - 1 ? blend : 0);
-            files.push(
-              await piece({
-                ...common,
-                from: s.start + p.start,
-                d: length,
-                zooms: zoomsFor(p.start, length),
-                preset: p.preset,
-                withAudio: false,
-                crf: 16,
-                out: path.join(temp, `segment-${n}-${i}.mp4`),
-              }),
-            );
+              length = p.end - p.start + (i < pieces.length - 1 ? blend : 0),
+              file = path.join(temp, `segment-${n}-${i}.mp4`);
+            await piece({
+              ...common,
+              from: s.start + p.start,
+              frames: Math.ceil(length * FPS - 0.001),
+              zooms: zoomsFor(p.start, length),
+              preset: p.preset,
+              crf: 16,
+              out: file,
+            });
+            files.push(file);
           }
-          const sound = await piece({
-            ...common,
-            from: s.start,
-            d,
-            withVideo: false,
-            out: path.join(temp, `segment-${n}.m4a`),
-          });
-          const args = ["-hide_banner", "-loglevel", "error", "-nostdin", "-y"];
+          await piece({ ...common, samples, sound });
+          const args = [];
           for (const f of files) args.push("-i", f);
-          args.push("-i", sound);
-          const graph = files.map((_, i) => `[${i}:v]settb=AVTB,fps=30[p${i}]`);
+          const graph = files.map(
+            (_, i) => `[${i}:v]settb=AVTB,fps=${FPS}[p${i}]`,
+          );
           let last = "p0";
           for (let i = 1; i < files.length; i++) {
             graph.push(
@@ -353,24 +513,29 @@ export function createRenderer({ db, dataDir, find }) {
             );
             last = `x${i}`;
           }
+          // Held for a moment longer, in case blending came up a frame short.
+          graph.push(`[${last}]tpad=stop_mode=clone:stop_duration=1[whole]`);
           args.push(
             "-filter_complex",
             graph.join(";"),
             "-map",
-            `[${last}]`,
-            "-map",
-            `${files.length}:a`,
-            "-t",
-            String(d),
+            "[whole]",
+            "-frames:v",
+            String(frames),
             ...encode(21),
-            "-c:a",
-            "copy",
             target,
           );
           await exec(args);
         }
-        offset += d;
-        parts.push(target);
+        if (frames) parts.push(target);
+        if (samples && n) {
+          await pipeline(
+            createReadStream(sound),
+            createWriteStream(soundtrack, { flags: "a" }),
+          );
+          rmSync(sound);
+        }
+        offset = end;
         progress(5 + ((n + 1) / project.segments.length) * 65);
       }
       const list = path.join(temp, "concat.txt");
@@ -379,28 +544,17 @@ export function createRenderer({ db, dataDir, find }) {
         parts.map((p) => `file '${p.replaceAll("'", "'\\''")}'`).join("\n"),
       );
       const combined = path.join(temp, "joined.mp4");
-      await run(
-        ffmpeg,
-        [
-          "-hide_banner",
-          "-loglevel",
-          "error",
-          "-nostdin",
-          "-y",
-          "-f",
-          "concat",
-          "-safe",
-          "0",
-          "-i",
-          list,
-          "-c",
-          "copy",
-          "-movflags",
-          "+faststart",
-          combined,
-        ],
-        { timeout: 600000, maxBuffer: 1024 * 1024 },
-      );
+      await exec([
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        list,
+        "-c",
+        "copy",
+        combined,
+      ]);
       const effects = project.overlays || [];
       const vf = [];
       let previous = "0:v",
@@ -462,62 +616,34 @@ export function createRenderer({ db, dataDir, find }) {
         );
         previous = target;
       }
-      if (vf.length) {
-        const script = path.join(temp, "effects.filter");
-        writeFileSync(script, vf.join(";"));
-        await run(
-          ffmpeg,
-          [
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-nostdin",
-            "-y",
-            "-i",
-            combined,
-            "-filter_complex",
-            readFileSync(script, "utf8"),
-            "-map",
-            `[${previous}]`,
-            "-map",
-            "0:a:0",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "21",
-            "-pix_fmt",
-            "yuv420p",
-            "-c:a",
-            "copy",
-            "-threads",
-            "2",
-            "-movflags",
-            "+faststart",
-            destination,
-          ],
-          { timeout: 1800000, maxBuffer: 2 * 1024 * 1024 },
-        );
-      } else
-        await run(
-          ffmpeg,
-          [
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-nostdin",
-            "-y",
-            "-i",
-            combined,
-            "-c",
-            "copy",
-            "-movflags",
-            "+faststart",
-            destination,
-          ],
-          { timeout: 600000, maxBuffer: 1024 * 1024 },
-        );
+      progress(75);
+      await exec([
+        "-i",
+        combined,
+        ...pcm,
+        "-i",
+        soundtrack,
+        ...(vf.length
+          ? ["-filter_complex", vf.join(";"), "-map", `[${previous}]`]
+          : ["-map", "0:v:0"]),
+        "-map",
+        "1:a:0",
+        ...(vf.length ? encode(21) : ["-c:v", "copy"]),
+        "-af",
+        [
+          "aformat=channel_layouts=stereo",
+          ...(l.audio.normalize ? await loudness() : []),
+        ].join(","),
+        "-c:a",
+        "aac",
+        "-ar",
+        String(RATE),
+        "-ac",
+        "2",
+        "-movflags",
+        "+faststart",
+        destination,
+      ]);
       let thumbnail = video.thumbnail;
       try {
         const { stdout } = await run(
@@ -547,7 +673,8 @@ export function createRenderer({ db, dataDir, find }) {
       } catch {}
       progress(99);
       return {
-        duration: project.segments.reduce((n, s) => n + s.end - s.start, 0),
+        // The sound is exactly this long, and the picture within half a frame of it.
+        duration: offset,
         size: statSync(destination).size,
         thumbnail,
       };

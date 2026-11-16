@@ -3,13 +3,9 @@ import {
   ArrowRight,
   ArrowUpRight,
   Check,
-  ChevronDown,
-  ChevronRight,
   Clapperboard,
-  Code2,
   Folder,
   Grid2X2,
-  HardDrive,
   HelpCircle,
   Link,
   List,
@@ -17,11 +13,9 @@ import {
   Lock,
   LogOut,
   Menu,
-  MoreHorizontal,
   Plus,
   Search,
   Settings,
-  ShieldCheck,
   Star,
   Upload,
   X,
@@ -42,7 +36,7 @@ import {
   type Preferences,
 } from "./prefs";
 import { createDemo, inspectVideo } from "./media";
-import { api, bytes, clock, type Clip } from "./types";
+import { api, clock, type Clip } from "./types";
 import { external, MAKER_URL } from "./links";
 // The shortcut key people actually have on their keyboard.
 const mod = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl";
@@ -77,7 +71,9 @@ export default function App() {
     } | null>(null),
     [viewerPassword, setViewerPassword] = useState(""),
     [viewerEmail, setViewerEmail] = useState(""),
-    [loginEmail, setLoginEmail] = useState("");
+    [loginEmail, setLoginEmail] = useState(""),
+    // Bumped to load the session, library and current page again.
+    [attempt, setAttempt] = useState(0);
   const input = useRef<HTMLInputElement>(null),
     search = useRef<HTMLInputElement>(null),
     toastId = useRef(0);
@@ -180,6 +176,10 @@ export default function App() {
     addEventListener("relay:open-settings", openSettings);
     return () => removeEventListener("relay:open-settings", openSettings);
   }, []);
+  // The section asked for applies to that one visit, not to every later one.
+  useEffect(() => {
+    if (dialog !== "settings") setSettingsFocus("");
+  }, [dialog]);
   async function openOnboarding() {
     setPrefs(await loadPreferences(true));
     setDialog("");
@@ -231,7 +231,11 @@ export default function App() {
         }
       } catch (e) {
         if (!cancelled) {
-          setError((e as Error).message);
+          setError(
+            e instanceof TypeError
+              ? "Relay couldn’t connect. Check your connection, then try again."
+              : (e as Error).message,
+          );
           // Only a missing or expired link means "no longer shared".
           setGone([404, 410].includes((e as { status?: number }).status ?? 0));
           if (token)
@@ -246,7 +250,24 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [path, token, refresh]);
+  }, [path, token, refresh, attempt]);
+  // The first load can fail while offline or while the server restarts. Until
+  // it works nothing syncs, so it is tried again as soon as the connection is back.
+  useEffect(() => {
+    if (session || token) return;
+    const retry = () => setAttempt((n) => n + 1);
+    addEventListener("online", retry);
+    return () => removeEventListener("online", retry);
+  }, [session, token]);
+  const signOut = async () => {
+    try {
+      await api("/api/session", { method: "DELETE" });
+      // A fresh page, so nothing of this workspace stays in memory.
+      location.assign("/");
+    } catch {
+      notify("Couldn’t sign out. Check your connection and try again.");
+    }
+  };
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
@@ -314,11 +335,17 @@ export default function App() {
     addEventListener("relay:library", update);
     return () => removeEventListener("relay:library", update);
   }, [refresh]);
-  const saved = (c: Clip, copied = false) => {
+  const saved = (c: Clip, copied = false, linkFailed = false) => {
     setRecord(false);
     setClips((old) => [c, ...old.filter((v) => v.id !== c.id)]);
     open(c);
-    notify(copied ? "Recording saved. Share link copied." : "Recording saved.");
+    notify(
+      copied
+        ? "Recording saved. Share link copied."
+        : linkFailed
+          ? "Recording saved. A share link couldn’t be made. Use Send to try again."
+          : "Recording saved.",
+    );
   };
   const update = (c: Clip) => {
     setClips((old) =>
@@ -430,8 +457,13 @@ export default function App() {
           ? section.slice(7)
           : "Library";
   // A brand-new library shows one welcome panel instead of an empty list.
+  // A library that never loaded is not known to be empty.
   const firstRun =
-    section === "library" && !query && !loading && clips.length === 0;
+    section === "library" &&
+    !query &&
+    !loading &&
+    clips.length === 0 &&
+    Boolean(session);
   // The phone menu behaves like a dialog: focus moves in, the page behind is inert,
   // and focus goes back to the menu button when it closes.
   const drawer = useRef<HTMLElement>(null),
@@ -482,8 +514,8 @@ export default function App() {
   const closeRecorder = () =>
     void recorderGuard.current().then((ok) => ok && setRecord(false));
   const recorderModal = record && session?.member?.role !== "viewer" && (
-    // Keyed and rendered at the same place in every view, so navigating
-    // (for example Back) never unmounts a recording in progress.
+    // Rendered with the same key in the library and in the editor, so moving
+    // between them (for example Back) never unmounts a recording in progress.
     <Modal
       key="recorder"
       label="New recording"
@@ -669,13 +701,16 @@ export default function App() {
                   }),
                 },
               );
+              setPassword("");
               setSession({
                 ...session,
                 unlocked: true,
                 member: signedIn.member,
               });
-              await refresh();
-              navigate("/");
+              // Stay on the page that was asked for (a video link, say) and load it.
+              setAttempt((n) => n + 1);
+              // The form is gone; put the keyboard at the top of the page.
+              setTimeout(() => document.getElementById("main")?.focus(), 80);
             } catch (e) {
               setError((e as Error).message);
             }
@@ -813,6 +848,12 @@ export default function App() {
               </span>
               <Settings size={17} />
             </button>
+            {session?.protected && (
+              <button className="sign-out" onClick={() => void signOut()}>
+                <LogOut size={15} />
+                Sign out
+              </button>
+            )}
           </div>
         </aside>
         {mobile && (
@@ -841,7 +882,7 @@ export default function App() {
             </label>
             <span className="topbar-spacer" />
             <div className="topbar-right">
-              <RecoveryCenter onOpen={open} notify={notify} />
+              <RecoveryCenter onOpen={open} />
               <button
                 className="icon-button"
                 aria-label="Help"
@@ -1006,10 +1047,7 @@ export default function App() {
                   {error}
                   <button
                     className="text-button"
-                    onClick={() => {
-                      setError("");
-                      void refresh().catch((e) => setError(e.message));
-                    }}
+                    onClick={() => setAttempt((n) => n + 1)}
                   >
                     Try again
                   </button>
@@ -1145,7 +1183,7 @@ export default function App() {
                     </article>
                   ))}
                 </div>
-              ) : (
+              ) : !session ? null : (
                 <div className="empty-state">
                   <div className="empty-icon">
                     <Clapperboard size={28} strokeWidth={1.2} />
@@ -1350,7 +1388,4 @@ function PlayMark() {
       <path d="m8 4 13 8-13 8Z" fill="currentColor" />
     </svg>
   );
-}
-function ScissorsIcon() {
-  return <span className="shortcut-icon">✂</span>;
 }

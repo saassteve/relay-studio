@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   CloudUpload,
   RefreshCw,
@@ -12,7 +12,6 @@ import {
   listDrafts,
   queueDraft,
   waitForDraft,
-  syncDraft,
   discardDraft,
   updateDraft,
   type Draft,
@@ -36,18 +35,17 @@ const STATES: Record<string, string> = {
   complete: "Done",
   failed: "Didn’t finish",
   recording: "Recording now",
+  review: "Not uploaded yet",
   processing: "Processing",
-  recorded: "Not uploaded yet",
-  uploading: "Uploading",
+  interrupted: "Saved, not finished",
 };
 const plain = (state: string) => STATES[state] || state;
-export function RecoveryCenter({
-  onOpen,
-  notify,
-}: {
-  onOpen: (v: Clip) => void;
-  notify: (message: string) => void;
-}) {
+// What went wrong, in words that say what to do about it.
+const reason = (e: unknown) =>
+  e instanceof TypeError
+    ? "Relay couldn’t reach the server. Check your connection and try again."
+    : (e as Error).message || "That didn’t work. Try again.";
+export function RecoveryCenter({ onOpen }: { onOpen: (v: Clip) => void }) {
   const [drafts, setDrafts] = useState<Draft[]>([]),
     [remote, setRemote] = useState<
       {
@@ -71,20 +69,45 @@ export function RecoveryCenter({
     [open, setOpen] = useState(false),
     [busy, setBusy] = useState(""),
     [error, setError] = useState("");
-  const load = async () => {
-    const local = await listDrafts();
-    setDrafts(
-      local.filter((d) => !["complete", "discarded"].includes(d.status)),
-    );
+  // Recordings discarded here whose server copy is still waiting to be deleted.
+  const [discarding, setDiscarding] = useState<string[]>([]);
+  const shown = useRef(open);
+  shown.current = open;
+  // The count on the bell needs recordings and notifications; the list of jobs
+  // is only read while Activity is open.
+  const loadRemote = () => {
     void api<typeof remote>("/api/recordings")
       .then(setRemote)
-      .catch(() => {});
-    void api<Job[]>("/api/jobs")
-      .then(setJobs)
       .catch(() => {});
     void api<typeof notifications>("/api/notifications")
       .then(setNotifications)
       .catch(() => {});
+    if (shown.current)
+      void api<Job[]>("/api/jobs")
+        .then(setJobs)
+        .catch(() => {});
+  };
+  // Which drafts exist and what state each is in, as last seen.
+  const known = useRef("");
+  const loadLocal = async () => {
+    const local = await listDrafts();
+    setDrafts(
+      local.filter((d) => !["complete", "discarded"].includes(d.status)),
+    );
+    setDiscarding(local.filter((d) => d.discardPending).map((d) => d.id));
+    // A draft that appears, finishes or is discarded changes the server's list
+    // too. One that only grows as it records does not.
+    const now = local
+      .map((d) => `${d.id} ${d.status} ${d.discardPending ? "pending" : ""}`)
+      .join();
+    if (now !== known.current) {
+      known.current = now;
+      loadRemote();
+    }
+  };
+  const load = () => {
+    void loadLocal();
+    loadRemote();
   };
   useEffect(() => {
     let alive = true;
@@ -98,19 +121,34 @@ export function RecoveryCenter({
       for (const d of items)
         if (d.status === "recording" && !live.has(`relay-rec-${d.id}`))
           await updateDraft(d.id, { status: "review" });
-      if (alive) void load();
+      if (alive) void loadLocal();
     });
+    // Drafts change with every second recorded. Only the list kept on this
+    // device is read again, and not more than twice a second.
+    let pending: ReturnType<typeof setTimeout> | undefined;
     const changed = () => {
-      if (alive) void load();
+      pending ??= setTimeout(() => {
+        pending = undefined;
+        if (alive) void loadLocal();
+      }, 500);
     };
     addEventListener("relay:drafts", changed);
-    const timer = setInterval(changed, 5000);
     return () => {
       alive = false;
-      clearInterval(timer);
+      clearTimeout(pending);
       removeEventListener("relay:drafts", changed);
     };
   }, []);
+  // The server is asked often while Activity is open, and only now and then
+  // otherwise, to keep the count on the bell honest.
+  useEffect(() => {
+    loadRemote();
+    const timer = setInterval(
+      () => document.hidden || loadRemote(),
+      open ? 5000 : 60000,
+    );
+    return () => clearInterval(timer);
+  }, [open]);
   const recover = async (d: Draft) => {
     setBusy(d.id);
     setError("");
@@ -119,16 +157,18 @@ export function RecoveryCenter({
       onOpen(await waitForDraft(d.id));
       setOpen(false);
     } catch (e) {
-      setError((e as Error).message);
+      setError(reason(e));
     } finally {
       setBusy("");
-      void load();
+      load();
     }
   };
+  // Saved on the server, with nothing on this device to match.
+  const orphans = remote.filter(
+    (r) => !drafts.some((d) => d.id === r.id) && !discarding.includes(r.id),
+  );
   const unseen = notifications.filter((n) => !n.seen).length,
-    pending =
-      drafts.length +
-      remote.filter((r) => !drafts.some((d) => d.id === r.id)).length;
+    pending = drafts.length + orphans.length;
   const active = jobs.filter((j) => j.status !== "complete");
   return (
     <>
@@ -152,6 +192,11 @@ export function RecoveryCenter({
           onClose={() => setOpen(false)}
         >
           <h2>Activity</h2>
+          {error && (
+            <div className="error" role="alert">
+              {error}
+            </div>
+          )}
           <h3 className="studio-section-title">Unfinished recordings</h3>
           {!pending && (
             <p className="muted small">
@@ -195,8 +240,11 @@ export function RecoveryCenter({
                         destructive: true,
                       })
                     ) {
-                      await discardDraft(d.id);
-                      void load();
+                      setError("");
+                      await discardDraft(d.id).catch((e) =>
+                        setError(reason(e)),
+                      );
+                      load();
                     }
                   }}
                 >
@@ -205,21 +253,25 @@ export function RecoveryCenter({
               )}
             </article>
           ))}
-          {remote
-            .filter((r) => !drafts.some((d) => d.id === r.id))
-            .map((r) => (
-              <article className="activity-item" key={r.id}>
-                <Clapperboard size={20} />
-                <div>
-                  <strong>{r.title}</strong>
-                  <small>{clock(r.duration)} · Saved, not finished</small>
-                </div>
+          {orphans.map((r) => (
+            <article className="activity-item" key={r.id}>
+              <Clapperboard size={20} />
+              <div>
+                <strong>{r.title}</strong>
+                <small>
+                  {clock(r.duration)} ·{" "}
+                  {STATES[r.status] ? plain(r.status) : "Saved, not finished"}
+                </small>
+              </div>
+              {/* Still being recorded somewhere else: finishing it here would cut it short. */}
+              {r.status !== "recording" && (
                 <button
                   className="btn small"
                   aria-label={`Recover ${r.title}`}
                   disabled={!!busy}
                   onClick={async () => {
                     setBusy(r.id);
+                    setError("");
                     try {
                       const j = await api<Job>(
                         `/api/recordings/${r.id}/finish`,
@@ -241,17 +293,51 @@ export function RecoveryCenter({
                         setOpen(false);
                       }
                     } catch (e) {
-                      setError((e as Error).message);
+                      setError(reason(e));
                     } finally {
                       setBusy("");
-                      void load();
+                      load();
                     }
                   }}
                 >
+                  {busy === r.id && <LoaderCircle className="spin" size={14} />}
                   Recover
                 </button>
-              </article>
-            ))}
+              )}
+              {r.status !== "processing" && (
+                <button
+                  className="icon-button danger"
+                  aria-label={`Discard ${r.title}`}
+                  disabled={!!busy}
+                  onClick={async () => {
+                    if (
+                      !(await confirmDialog({
+                        title: "Delete this recording?",
+                        body:
+                          r.status === "recording"
+                            ? `“${r.title}” may still be recording on another device. Deleting it ends that recording and can’t be undone.`
+                            : `“${r.title}” hasn’t been saved to your library. Deleting it can’t be undone.`,
+                        confirm: "Delete recording",
+                        destructive: true,
+                      }))
+                    )
+                      return;
+                    setError("");
+                    try {
+                      await api(`/api/recordings/${r.id}`, {
+                        method: "DELETE",
+                      });
+                    } catch (e) {
+                      setError(reason(e));
+                    }
+                    load();
+                  }}
+                >
+                  <Trash2 size={14} />
+                </button>
+              )}
+            </article>
+          ))}
           {active.length > 0 && (
             <h3 className="studio-section-title">In progress</h3>
           )}
@@ -278,8 +364,11 @@ export function RecoveryCenter({
                 <button
                   className="btn small"
                   onClick={async () => {
-                    await api(`/api/jobs/${j.id}/retry`, { method: "POST" });
-                    void load();
+                    setError("");
+                    await api(`/api/jobs/${j.id}/retry`, {
+                      method: "POST",
+                    }).catch((e) => setError(reason(e)));
+                    load();
                   }}
                 >
                   Retry
@@ -293,8 +382,11 @@ export function RecoveryCenter({
               className="text-button small"
               hidden={!unseen}
               onClick={async () => {
-                await api("/api/notifications/all/read", { method: "POST" });
-                void load();
+                setError("");
+                await api("/api/notifications/all/read", {
+                  method: "POST",
+                }).catch((e) => setError(reason(e)));
+                load();
               }}
             >
               Mark all read
@@ -305,12 +397,18 @@ export function RecoveryCenter({
               className={`notification-item ${n.seen ? "" : "unread"}`}
               key={n.id}
               onClick={async () => {
-                await api(`/api/notifications/${n.id}/read`, {
-                  method: "POST",
-                });
-                if (n.video_id)
-                  onOpen(await api<Clip>(`/api/videos/${n.video_id}`));
-                setOpen(false);
+                setError("");
+                try {
+                  await api(`/api/notifications/${n.id}/read`, {
+                    method: "POST",
+                  });
+                  if (n.video_id)
+                    onOpen(await api<Clip>(`/api/videos/${n.video_id}`));
+                  setOpen(false);
+                } catch (e) {
+                  setError(reason(e));
+                  loadRemote();
+                }
               }}
             >
               <span className="avatar" aria-hidden="true">
@@ -340,11 +438,6 @@ export function RecoveryCenter({
             <p className="muted small">
               Comments and reactions on your videos appear here.
             </p>
-          )}
-          {error && (
-            <div className="error" role="alert">
-              {error}
-            </div>
           )}
         </Modal>
       )}

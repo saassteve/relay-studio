@@ -83,6 +83,13 @@ export function ShareSettings({
     }
   };
   if (saveRef) saveRef.current = save;
+  // Once these settings are gone from the screen there is nothing left to save.
+  useEffect(
+    () => () => {
+      if (saveRef) saveRef.current = async () => true;
+    },
+    [saveRef],
+  );
   // Which preset matches the saved expiry, if any.
   const daysLeft = c.expiresAt
     ? (new Date(c.expiresAt).getTime() - Date.now()) / 86400000

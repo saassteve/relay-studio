@@ -12,6 +12,7 @@ import {
 import { api } from "./types";
 import "./ai-settings.css";
 import { external } from "./links";
+import { isLocal } from "./local";
 
 export interface AIProvider {
   id: string;
@@ -38,7 +39,6 @@ export interface AIState {
   canEdit: boolean;
   providers: AIProvider[];
 }
-// External pages open in the browser; in the Mac app a plain link does that.
 export function AISettings({ notify }: { notify: (s: string) => void }) {
   const [state, setState] = useState<AIState | null>(null),
     [provider, setProvider] = useState(""),
@@ -357,7 +357,7 @@ export function AISettings({ notify }: { notify: (s: string) => void }) {
               <p className="studio-hint">
                 The access token can edit every video in this workspace, so
                 treat it like a password.
-                {["127.0.0.1", "localhost"].includes(location.hostname) &&
+                {isLocal &&
                   " Apps on this computer can connect now. The Claude and ChatGPT web apps need a public address, which means hosting Relay on a server."}
               </p>
             </div>

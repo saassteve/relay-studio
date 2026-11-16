@@ -28,13 +28,21 @@ On Linux, install your distribution's `ffmpeg` and set `FFMPEG_BIN=/usr/bin/ffmp
 | `HOST`, `PORT` | Listen address. Any non-local `HOST` requires `ADMIN_PASSWORD` (12+ characters). |
 | `ADMIN_PASSWORD`, `ADMIN_EMAIL` | Workspace owner sign-in. |
 | `PUBLIC_URL` | The exact HTTPS origin people use. Put Relay behind an HTTPS reverse proxy. |
+| `TRUST_PROXY` | Set this behind a reverse proxy so Relay sees each visitor's own address (it limits repeated attempts per address). Use the number of proxies in front of Relay, usually `1`, or a comma-separated list of their addresses or subnets such as `10.0.0.0/8`. `true` trusts every proxy, so only use it when Relay can't be reached directly. Leave it unset when there is no proxy. |
 | `DATA_DIR` | Where the library, media and models are stored. Back it up with the server stopped. |
 | `FFMPEG_BIN` | Path to the FFmpeg executable. |
 | `OLLAMA_URL`, `OLLAMA_MODEL` | Optional summaries through your own Ollama server. Relay asks before sending a transcript. |
+| `RELAY_WEBHOOK_URL`, `RELAY_WEBHOOK_SECRET` | Optional address that receives a video's details when someone sends it from Relay, and the bearer secret sent with it. |
+
+With Docker, `compose.yaml` passes `ADMIN_PASSWORD`, `ADMIN_EMAIL`, `PUBLIC_URL`, `TRUST_PROXY` and the Ollama and webhook settings from `.env` to the container. The image sets the rest.
 
 Limits: imports 1 GB, project bundles 2 GB expanded, recording sessions 8 GB.
 
-## Connect the Mac app to your server
+## Send videos from the Mac app to your server
+
+Keep recording and editing on your Mac, and send only finished videos to the server for a link anyone can open. On the server, open **Settings → Links that work anywhere** and copy the address and access key. In the app, paste them into the same place in Settings. See [Links that work for anyone](CLOUD.md).
+
+## Run the Mac app against your server
 
 ```sh
 RELAY_SERVER_URL=https://relay.example.com /Applications/Relay.app/Contents/MacOS/Relay

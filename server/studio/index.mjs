@@ -3,42 +3,37 @@ import {
   mkdirSync,
   existsSync,
   writeFileSync,
-  statSync,
+  readFileSync,
   rmSync,
 } from "node:fs";
 import path from "node:path";
-import ffmpeg from "../ffmpeg.mjs";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { createJobs } from "./jobs.mjs";
-import { createRenderer } from "./render.mjs";
+import { createRenderer, engine, probe } from "./render.mjs";
 import { registerRecordings } from "./recordings.mjs";
 import { registerSharing } from "./sharing.mjs";
 import { createTranscription } from "./transcription.mjs";
-import { parseJSON, problem, mediaHeaders } from "./schema.mjs";
+import { parseJSON, problem, mediaHeaders, sendMedia } from "./schema.mjs";
 import {
   getProject,
   validateProject,
-  initialProject,
   publishedProject,
   outputWords,
+  transcriptWords,
   captions,
   parseCaptions,
   cutRanges,
+  cleanOutline,
 } from "./project.mjs";
 import { registerPortable } from "./portable.mjs";
 import { autoZoom } from "./autozoom.mjs";
 import { createAssistantEdits } from "./assistant-edits.mjs";
 import { registerAI } from "./ai/index.mjs";
-import { readFileSync as readText } from "node:fs";
-const packageVersion = JSON.parse(
-  readText(new URL("../../package.json", import.meta.url), "utf8"),
-).version;
 import { registerIntegrations } from "./integrations.mjs";
-const run = promisify(execFile);
+const packageVersion = JSON.parse(
+  readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+).version;
 export function registerStudio(context) {
-  const { app, db, dataDir, owner, admin, rateLimit, find, serialize } =
-      context,
+  const { app, db, dataDir, owner, admin, find, serialize } = context,
     jobs = createJobs(db),
     renderer = createRenderer(context),
     transcription = createTranscription({ ...context, renderer });
@@ -107,14 +102,14 @@ export function registerStudio(context) {
   app.put("/api/videos/:id/outline", owner, (req, res) => {
     const v = find(req.params.id),
       b = req.body;
-    const outline = {
+    const outline = cleanOutline({
       ...parseJSON(v.outline, {}),
-      summary: String(b.summary || "").slice(0, 10000),
+      summary: String(b.summary || ""),
       actionItems: Array.isArray(b.actionItems)
-        ? b.actionItems.slice(0, 30).map((s) => String(s).slice(0, 1000))
+        ? b.actionItems.slice(0, 30).map(String)
         : [],
       projectSegments: JSON.stringify(getProject(v).segments),
-    };
+    });
     db.prepare("UPDATE videos SET outline=? WHERE id=?").run(
       JSON.stringify(outline),
       v.id,
@@ -155,15 +150,27 @@ export function registerStudio(context) {
       res.json(projectResponse(find(v.id)));
     });
   app.post("/api/videos/:id/project/cut", owner, (req, res) => {
-    const v = find(req.params.id);
+    const v = find(req.params.id),
+      ranges = req.body.ranges ?? [];
+    if (
+      !Array.isArray(ranges) ||
+      ranges.length > 500 ||
+      ranges.some(
+        (r) =>
+          !Number.isFinite(r?.start) ||
+          !Number.isFinite(r?.end) ||
+          r.start >= r.end,
+      )
+    )
+      throw problem(400, "Choose valid stretches of the video to cut.");
     const p = cutRanges(
       getProject(v),
       String(req.body.sourceId || v.id),
-      req.body.ranges || [],
+      ranges,
     );
     res.json(save(v, validateProject(p, sourceFind)));
   });
-  app.get("/api/videos/:id/tracks/:role", owner, (req, res) => {
+  app.get("/api/videos/:id/tracks/:role", owner, (req, res, next) => {
     const v = find(req.params.id),
       assets = renderer.assetsFor(v),
       // "main" is whichever track carries the picture; "voice" is the microphone.
@@ -176,7 +183,7 @@ export function registerStudio(context) {
       asset = wanted.map((r) => assets.find((a) => a.role === r)).find(Boolean);
     if (!asset) throw problem(404, "This source track was not found.");
     mediaHeaders(res, asset.mime);
-    res.sendFile(asset.filename, { root: path.join(dataDir, "media") });
+    sendMedia(res, asset.filename, path.join(dataDir, "media"), next);
   });
   app.post("/api/videos/:id/render", owner, (req, res) => {
     const v = find(req.params.id),
@@ -293,27 +300,7 @@ export function registerStudio(context) {
     let words = req.body.content
       ? parseCaptions(req.body.content)
       : req.body.words;
-    if (!Array.isArray(words) || words.length > 100000)
-      throw problem(400, "Invalid transcript.");
-    words = words.map((w) => {
-      const start = Number(w.start),
-        end = Number(w.end),
-        text = String(w.text || "").slice(0, 2000);
-      if (
-        !Number.isFinite(start) ||
-        !Number.isFinite(end) ||
-        start < 0 ||
-        end <= start ||
-        end > v.duration + 0.5
-      )
-        throw problem(400, "Transcript timestamps are outside the recording.");
-      return {
-        text,
-        start,
-        end,
-        granularity: w.granularity === "segment" ? "segment" : "word",
-      };
-    });
+    words = transcriptWords(words, v.duration);
     db.prepare("UPDATE videos SET transcript=? WHERE id=?").run(
       JSON.stringify(words),
       v.id,
@@ -360,7 +347,8 @@ export function registerStudio(context) {
       autoZoom(points, {
         segments: project.segments,
         sourceId: v.id,
-        duration: v.duration,
+        // The length of the footage, not of the published video.
+        duration: sourceFind(v.id).duration,
       }).filter(
         (z) => !existing.some((e) => z.start < e.end && z.end > e.start),
       ),
@@ -383,9 +371,7 @@ export function registerStudio(context) {
       { height: 360, rate: "650k", bandwidth: 850000 },
       { height: 720, rate: "1800k", bandwidth: 2100000 },
     ];
-    const info = await import("./render.mjs").then((m) =>
-      m.probe(path.join(dataDir, "media", v.filename)),
-    );
+    const info = await probe(path.join(dataDir, "media", v.filename));
     const selected = variants.filter((v) => v.height <= info.height);
     if (!selected.length)
       selected.push({
@@ -397,46 +383,38 @@ export function registerStudio(context) {
     for (let i = 0; i < selected.length; i++) {
       const variant = selected[i],
         name = `${variant.height}p`;
-      await run(
-        ffmpeg,
-        [
-          "-hide_banner",
-          "-loglevel",
-          "error",
-          "-nostdin",
-          "-y",
-          "-i",
-          path.join(dataDir, "media", v.filename),
-          "-vf",
-          `scale=-2:${variant.height}`,
-          "-c:v",
-          "libx264",
-          "-preset",
-          "veryfast",
-          "-b:v",
-          variant.rate,
-          "-c:a",
-          "aac",
-          "-b:a",
-          "96k",
-          "-g",
-          "120",
-          "-sc_threshold",
-          "0",
-          "-threads",
-          "2",
-          "-hls_time",
-          "4",
-          "-hls_list_size",
-          "0",
-          "-hls_playlist_type",
-          "vod",
-          "-hls_segment_filename",
-          path.join(root, `${name}_%05d.ts`),
-          path.join(root, `${name}.m3u8`),
-        ],
-        { timeout: 1800000, maxBuffer: 1024 * 1024 },
-      );
+      await engine([
+        "-y",
+        "-i",
+        path.join(dataDir, "media", v.filename),
+        "-vf",
+        `scale=-2:${variant.height}`,
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-b:v",
+        variant.rate,
+        "-c:a",
+        "aac",
+        "-b:a",
+        "96k",
+        "-g",
+        "120",
+        "-sc_threshold",
+        "0",
+        "-threads",
+        "2",
+        "-hls_time",
+        "4",
+        "-hls_list_size",
+        "0",
+        "-hls_playlist_type",
+        "vod",
+        "-hls_segment_filename",
+        path.join(root, `${name}_%05d.ts`),
+        path.join(root, `${name}.m3u8`),
+      ]);
       master.push(
         `#EXT-X-STREAM-INF:BANDWIDTH=${variant.bandwidth}`,
         `${name}.m3u8`,
@@ -466,12 +444,19 @@ export function registerStudio(context) {
     validateProject,
     suggestions: transcription.suggestions,
   });
-  registerIntegrations({
+  const { check } = registerIntegrations({
     ...context,
     sharing,
     jobs,
     edits,
     version: packageVersion,
   });
-  return { jobs, renderer, recordings, sharing, close: () => jobs.close() };
+  return {
+    jobs,
+    renderer,
+    recordings,
+    sharing,
+    check,
+    close: () => jobs.close(),
+  };
 }

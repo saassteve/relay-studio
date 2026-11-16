@@ -1,13 +1,22 @@
 import { fileURLToPath } from "node:url";
-import ffmpeg from "../ffmpeg.mjs";
 import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { writeFileSync, rmSync, mkdtempSync, existsSync } from "node:fs";
 import path from "node:path";
 import { parseJSON, problem } from "./schema.mjs";
 import { getProject, outputWords } from "./project.mjs";
-const run = promisify(execFile);
+import { engine, sweep } from "./render.mjs";
 export function createTranscription({ db, dataDir, find, renderer }) {
+  sweep(dataDir, "asr-", "summary-");
+  // The track that carries the voice.
+  const spoken = (v) => {
+    const assets = renderer.assetsFor(v);
+    return (
+      assets.find((a) => a.role === "microphone") ||
+      assets.find((a) => a.role === "primary") ||
+      assets.find((a) => a.role === "screen") ||
+      assets[0]
+    );
+  };
   const models = [
     "Xenova/whisper-tiny.en",
     "Xenova/whisper-tiny",
@@ -41,42 +50,30 @@ export function createTranscription({ db, dataDir, find, renderer }) {
       throw problem(400, "Choose a supported local transcription model.");
     if (!supported) throw unsupported();
     const v = find(videoId),
-      assets = renderer.assetsFor(v),
-      source =
-        assets.find((a) => a.role === "microphone") ||
-        assets.find((a) => a.role === "primary") ||
-        assets.find((a) => a.role === "screen") ||
-        assets[0];
+      source = spoken(v);
     if (!(await renderer.info(source)).hasAudio)
       throw problem(400, "This recording has no audio track to transcribe.");
     const dir = mkdtempSync(path.join(dataDir, "tmp", "asr-")),
       audio = path.join(dir, "audio.f32");
     try {
       progress(5);
-      await run(
-        ffmpeg,
-        [
-          "-hide_banner",
-          "-loglevel",
-          "error",
-          "-nostdin",
-          "-i",
-          path.join(dataDir, "media", source.filename),
-          "-vn",
-          "-ac",
-          "1",
-          "-ar",
-          "16000",
-          "-f",
-          "f32le",
-          audio,
-        ],
-        { timeout: 600000, maxBuffer: 1024 * 1024 },
-      );
+      await engine([
+        "-i",
+        path.join(dataDir, "media", source.filename),
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-f",
+        "f32le",
+        audio,
+      ]);
       progress(15);
       const result = await worker(
         [audio, path.join(dataDir, "models"), model],
         progress,
+        Math.max(1800000, source.duration * 4000),
       );
       const chunks = (result.chunks || [])
         .map((c) => ({
@@ -98,7 +95,9 @@ export function createTranscription({ db, dataDir, find, renderer }) {
       rmSync(dir, { recursive: true, force: true });
     }
   }
-  async function worker(args, progress) {
+  // The local AI reports nothing while it listens, so it gets a time limit:
+  // half an hour, or longer for a long recording.
+  async function worker(args, progress, limit = 1800000) {
     const child = execFile(
       process.execPath,
       [fileURLToPath(new URL("./asr-worker.mjs", import.meta.url)), ...args],
@@ -107,10 +106,14 @@ export function createTranscription({ db, dataDir, find, renderer }) {
           ...process.env,
           ELECTRON_RUN_AS_NODE: process.env.ELECTRON_RUN_AS_NODE || "",
         },
-        timeout: 1800000,
         maxBuffer: 20 * 1024 * 1024,
       },
     );
+    let late = false;
+    const timer = setTimeout(() => {
+      late = true;
+      child.kill("SIGKILL");
+    }, limit);
     child.stderr.on("data", (data) => {
       const matches = String(data).matchAll(/RELAY_PROGRESS:(\d+)/g);
       for (const m of matches) progress(15 + Number(m[1]) * 0.65);
@@ -120,8 +123,19 @@ export function createTranscription({ db, dataDir, find, renderer }) {
         error = "";
       child.stdout.on("data", (d) => (output += d));
       child.stderr.on("data", (d) => (error += d));
-      child.on("error", reject);
+      child.on("error", (e) => {
+        clearTimeout(timer);
+        reject(e);
+      });
       child.on("close", (code) => {
+        clearTimeout(timer);
+        if (late)
+          return reject(
+            problem(
+              504,
+              "The local AI took too long and was stopped. Try a shorter recording.",
+            ),
+          );
         if (code !== 0)
           return reject(
             problem(
@@ -187,6 +201,8 @@ export function createTranscription({ db, dataDir, find, renderer }) {
           stream: false,
           prompt: `Summarize this transcript faithfully in a short paragraph. Do not invent facts.\n\n${text.slice(0, 30000)}`,
         }),
+        // The server named in the settings is the only one spoken to.
+        redirect: "error",
         signal: AbortSignal.timeout(300000),
       });
       if (!response.ok)
@@ -238,34 +254,32 @@ export function createTranscription({ db, dataDir, find, renderer }) {
   }
   async function suggestions(videoId) {
     const v = find(videoId),
-      assets = renderer.assetsFor(v),
-      asset =
-        assets.find((a) => a.role === "microphone") ||
-        assets.find((a) => a.role === "primary") ||
-        assets.find((a) => a.role === "screen") ||
-        assets[0];
+      asset = spoken(v),
+      heard = await renderer.info(asset);
     let silence = [];
-    if ((await renderer.info(asset)).hasAudio) {
+    if (heard.hasAudio) {
+      // Pauses are found in the recording itself, which can be longer than the
+      // video last published from it.
+      const length = heard.duration || asset.duration;
       let output = "";
       try {
-        const r = await run(
-          ffmpeg,
-          [
-            "-hide_banner",
-            "-nostdin",
-            "-i",
-            path.join(dataDir, "media", asset.filename),
-            "-vn",
-            "-af",
-            "silencedetect=noise=-35dB:d=0.65",
-            "-f",
-            "null",
-            "-",
-          ],
-          { timeout: 600000, maxBuffer: 4 * 1024 * 1024 },
-        );
-        output = r.stderr;
+        output = (
+          await engine(
+            [
+              "-i",
+              path.join(dataDir, "media", asset.filename),
+              "-vn",
+              "-af",
+              "silencedetect=noise=-35dB:d=0.65",
+              "-f",
+              "null",
+              "-",
+            ],
+            { log: "info" },
+          )
+        ).stderr;
       } catch (e) {
+        if (e.expected) throw e;
         output = e.stderr || "";
       }
       let start;
@@ -275,17 +289,17 @@ export function createTranscription({ db, dataDir, find, renderer }) {
           silence.push({
             sourceId: v.id,
             start: Math.max(0, start + 0.1),
-            end: Math.min(v.duration, +m[2] - 0.1),
+            end: Math.min(length, +m[2] - 0.1),
             kind: "silence",
           });
           start = undefined;
         }
       }
-      if (start !== undefined && v.duration - start > 0.65)
+      if (start !== undefined && length - start > 0.65)
         silence.push({
           sourceId: v.id,
           start: start + 0.1,
-          end: v.duration,
+          end: length,
           kind: "silence",
         });
     }

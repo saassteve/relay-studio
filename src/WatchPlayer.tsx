@@ -117,6 +117,8 @@ export function WatchPlayer({
       className={`draft-player watch-player ${full ? "is-full" : ""}`}
       ref={box}
       onKeyDown={(e) => {
+        // Leave browser and system shortcuts such as find and minimise alone.
+        if (e.metaKey || e.ctrlKey || e.altKey) return;
         const el = e.target as HTMLElement;
         const control = /^(INPUT|SELECT|BUTTON|TEXTAREA)$/.test(el.tagName),
           field = /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName);

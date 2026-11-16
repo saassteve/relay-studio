@@ -6,6 +6,13 @@ services:
     environment:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD to at least 12 characters in .env}
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:5173}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      # How many reverse proxies sit in front of Relay (usually 1), or their addresses.
+      TRUST_PROXY: ${TRUST_PROXY:-}
+      OLLAMA_URL: ${OLLAMA_URL:-}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-}
+      RELAY_WEBHOOK_URL: ${RELAY_WEBHOOK_URL:-}
+      RELAY_WEBHOOK_SECRET: ${RELAY_WEBHOOK_SECRET:-}
     volumes:
       - relay-data:/app/data
     restart: unless-stopped

@@ -15,6 +15,8 @@ export interface Preferences {
   bubbleSize?: BubbleSize;
   quality?: 1280 | 1920 | 3840;
   mode?: Mode;
+  // Device ids mean something only to the browser and address that saved them.
+  // The recorder falls back to the default device when one is not recognised.
   microphoneId?: string;
   cameraId?: string;
   systemAudio?: boolean;
@@ -44,7 +46,6 @@ let loading: Promise<Preferences> | null = null;
 // Changes not yet confirmed by the server; resent with the next save.
 let unsaved: Record<string, unknown> = {};
 let latestWrite = 0;
-const listeners = new Set<(p: Preferences) => void>();
 export function loadPreferences(force = false): Promise<Preferences> {
   if (cache && loaded && !force) return Promise.resolve(cache);
   return (loading ??= api<Preferences>("/api/preferences")
@@ -70,7 +71,6 @@ export async function savePreferences(
 ): Promise<Preferences> {
   cache = { ...(cache || {}), ...next } as Preferences;
   unsaved = { ...unsaved, ...next };
-  listeners.forEach((fn) => fn(cache!));
   const write = ++latestWrite,
     sending = unsaved;
   try {
@@ -85,10 +85,5 @@ export async function savePreferences(
   } catch {
     /* Kept in `unsaved`; it goes out with the next change. */
   }
-  listeners.forEach((fn) => fn(cache!));
   return cache!;
-}
-export function onPreferences(fn: (p: Preferences) => void) {
-  listeners.add(fn);
-  return () => listeners.delete(fn);
 }

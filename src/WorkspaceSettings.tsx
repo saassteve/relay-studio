@@ -1,5 +1,7 @@
 import { confirmDialog } from "./Modal";
 import { AISettings } from "./AISettings";
+import { CloudSettings } from "./CloudSettings";
+import { isLocal as localOnly } from "./local";
 import {
   cachedPreferences,
   defaults,
@@ -11,8 +13,6 @@ import { useEffect, useState } from "react";
 import {
   Check,
   Copy,
-  KeyRound,
-  Link,
   LoaderCircle,
   Plus,
   RefreshCw,
@@ -62,12 +62,6 @@ export function WorkspaceSettings({
     [settings, setSettings] = useState<{
       sharing: { publicLinks: boolean; credit?: boolean };
     } | null>(null),
-    [integration, setIntegration] = useState<{
-      token: string;
-      mcpPath: string;
-      webhookConfigured: boolean;
-    } | null>(null),
-    [reveal, setReveal] = useState(false),
     [desktopNotifications, setDesktopNotifications] = useState(
       localStorage.getItem("relay-native-notifications") === "true",
     );
@@ -304,6 +298,9 @@ export function WorkspaceSettings({
             <Check size={14} />
             Save policy
           </button>
+          <div data-settings="cloud">
+            <CloudSettings notify={notify} />
+          </div>
           <div data-settings="ai">
             <AISettings notify={notify} />
           </div>
@@ -431,7 +428,6 @@ export function InvitationPage({ token }: { token: string }) {
   );
 }
 
-const localOnly = ["127.0.0.1", "localhost"].includes(location.hostname);
 // The choices made during setup, changeable at any time.
 function RecordingPreferences() {
   const [p, setP] = useState<Preferences>(cachedPreferences());

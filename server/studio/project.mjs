@@ -1,6 +1,8 @@
 import { problem, parseJSON } from "./schema.mjs";
 import { WALLPAPERS, PRESETS } from "./compose.mjs";
 import { CAPTION_STYLES, TITLE_TYPES } from "./titles.mjs";
+// The shortest a layout change may be, with room for floating-point subtraction.
+const MIN_SCENE = 0.5 - 1e-6;
 export const defaultLayout = () => ({
   width: 1280,
   height: 720,
@@ -36,6 +38,8 @@ export function validateProject(input, find) {
   )
     throw problem(400, "A project needs 1–100 video sections.");
   const segments = input.segments.map((s) => {
+    if (!s || typeof s !== "object")
+      throw problem(400, "A project needs 1–100 video sections.");
     const source = find(String(s.sourceId));
     const start = number(s.start, 0, source.duration, "section start"),
       end = number(s.end, 0, source.duration + 0.05, "section end");
@@ -104,7 +108,7 @@ export function validateProject(input, find) {
           "zoom",
           "cursor",
           ...TITLE_TYPES,
-        ].includes(o.type)
+        ].includes(o?.type)
       )
         throw problem(400, "Unsupported visual effect.");
       const start = number(o.start, 0, 86400, "effect start"),
@@ -119,8 +123,9 @@ export function validateProject(input, find) {
         type: o.type,
         start,
         end,
-        x: number(o.x ?? 0.1, 0, 0.95, "effect x"),
-        y: number(o.y ?? 0.1, 0, 0.95, "effect y"),
+        // A zoom's point of focus can sit right on the edge of the frame.
+        x: number(o.x ?? 0.1, 0, o.type === "zoom" ? 1 : 0.95, "effect x"),
+        y: number(o.y ?? 0.1, 0, o.type === "zoom" ? 1 : 0.95, "effect y"),
         w: number(o.w ?? 0.3, 0.01, 1, "effect width"),
         h: number(o.h ?? 0.15, 0.01, 1, "effect height"),
         scale: number(o.scale ?? 1.8, 1, 4, "zoom"),
@@ -143,14 +148,14 @@ export function validateProject(input, find) {
     throw problem(400, "Use at most 40 layout changes.");
   const scenes = (input.scenes || [])
     .map((sc, i) => {
-      if (!PRESETS.includes(sc.preset))
+      if (!PRESETS.includes(sc?.preset))
         throw problem(400, "Choose a supported layout.");
       const start = number(sc.start, 0, 86400, "layout start"),
         until = number(sc.end, 0, 86400.05, "layout end");
-      if (until - start < 0.5)
+      if (until - start < MIN_SCENE)
         throw problem(400, "A layout change must last at least half a second.");
       const end = Math.min(until, total);
-      if (end - start < 0.5) return null;
+      if (end - start < MIN_SCENE) return null;
       return {
         id: String(sc.id || i).slice(0, 80),
         start,
@@ -226,8 +231,32 @@ export function cutRanges(project, sourceId, ranges) {
     ...project,
     segments,
     overlays: moved(project.overlays, 0.1),
-    ...(project.scenes ? { scenes: moved(project.scenes, 0.5) } : {}),
+    ...(project.scenes ? { scenes: moved(project.scenes, MIN_SCENE) } : {}),
   };
+}
+// Checks a transcript against the length of its recording and returns clean words.
+export function transcriptWords(words, duration) {
+  if (!Array.isArray(words) || words.length > 100000)
+    throw problem(400, "Invalid transcript.");
+  return words.map((w) => {
+    const start = Number(w?.start),
+      end = Number(w?.end),
+      text = String(w?.text || "").slice(0, 2000);
+    if (
+      !Number.isFinite(start) ||
+      !Number.isFinite(end) ||
+      start < 0 ||
+      end <= start ||
+      end > duration + 0.5
+    )
+      throw problem(400, "Transcript timestamps are outside the recording.");
+    return {
+      text,
+      start,
+      end,
+      granularity: w.granularity === "segment" ? "segment" : "word",
+    };
+  });
 }
 export function outputWords(project, find) {
   let offset = 0;
@@ -277,8 +306,24 @@ export const captions = (words, format = "vtt") =>
         `${format === "srt" ? `${i + 1}\n` : ""}${stamp(c.start, format === "srt" ? "," : ".")} --> ${stamp(c.end, format === "srt" ? "," : ".")}\n${c.text.replaceAll("-->", "→")}\n`,
     )
     .join("\n");
+// A timing line such as "00:01.000 --> 00:04.000". It is anchored, and no two
+// neighbouring parts can match the same character, so a hostile line is still
+// read in one pass.
+const TIMING = /^[ \t]*(\d[\d:.,]*)[ \t]*-->[ \t]*(\d[\d:.,]*)/;
+// Removes <tags> in one pass. A "<" that is never closed stays as text.
+function withoutTags(value) {
+  let out = "",
+    at = 0;
+  for (;;) {
+    const open = value.indexOf("<", at),
+      close = open < 0 ? -1 : value.indexOf(">", open);
+    if (close < 0) return out + value.slice(at);
+    out += value.slice(at, open);
+    at = close + 1;
+  }
+}
 export function parseCaptions(content) {
-  if (typeof content !== "string" || content.length > 2000000)
+  if (typeof content !== "string" || content.length > 1000000)
     throw problem(400, "The caption file is too large.");
   const result = [];
   const time = (s) => {
@@ -289,21 +334,45 @@ export function parseCaptions(content) {
     const lines = block.split("\n"),
       i = lines.findIndex((l) => l.includes("-->"));
     if (i < 0) continue;
-    const match = lines[i].match(/([\d:. ,]+)\s*-->\s*([\d:.,]+)/);
+    const match = lines[i].slice(0, 200).match(TIMING);
     if (!match) continue;
-    const start = time(match[1].trim()),
-      end = time(match[2].trim()),
-      text = lines
-        .slice(i + 1)
-        .join(" ")
-        .replace(/<[^>]*>/g, "")
-        .trim();
+    const start = time(match[1]),
+      end = time(match[2]),
+      text = withoutTags(lines.slice(i + 1).join(" ")).trim();
     if (Number.isFinite(start) && Number.isFinite(end) && end > start && text)
       result.push({ start, end, text, granularity: "segment" });
   }
   if (!result.length)
     throw problem(400, "No valid captions were found. Import SRT or WebVTT.");
   return result;
+}
+// Notes about a video (summary, chapters, action items) arrive from imported
+// bundles and from the editor. Only known fields of the right kind are kept.
+export function cleanOutline(input) {
+  const o = input && typeof input === "object" ? input : {},
+    line = (v, max) => (typeof v === "string" ? v.slice(0, max) : ""),
+    out = {};
+  if (typeof o.summary === "string") out.summary = o.summary.slice(0, 10000);
+  if (Array.isArray(o.chapters))
+    out.chapters = o.chapters
+      .slice(0, 2000)
+      .map((c) => ({ time: Number(c?.time), title: line(c?.title, 300) }))
+      .filter((c) => Number.isFinite(c.time) && c.time >= 0 && c.title);
+  if (Array.isArray(o.actionItems))
+    out.actionItems = o.actionItems
+      .slice(0, 30)
+      .filter((s) => typeof s === "string")
+      .map((s) => s.slice(0, 1000));
+  for (const [name, max] of [
+    ["title", 300],
+    ["provider", 80],
+    ["generatedBy", 80],
+    ["generated", 40],
+    // The sections these notes describe; they are hidden once the edit changes.
+    ["projectSegments", 40000],
+  ])
+    if (line(o[name], max)) out[name] = line(o[name], max);
+  return out;
 }
 
 export function publishedProject(v) {

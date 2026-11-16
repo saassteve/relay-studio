@@ -48,6 +48,16 @@ module.exports = {
         "Relay captures system audio only when you enable it.",
     },
   },
+  electronFuses: {
+    // Stays on: Relay starts its library server (desktop/main.cjs) and the speech
+    // worker (server/studio/transcription.mjs) by running its own binary with
+    // ELECTRON_RUN_AS_NODE. Turning this off would stop both.
+    runAsNode: true,
+    enableNodeOptionsEnvironmentVariable: false,
+    enableNodeCliInspectArguments: false,
+    // The app ships unpacked (asar: false above).
+    onlyLoadAppFromAsar: false,
+  },
   dmg: {
     title: "Install Relay",
     format: "ULFO",
@@ -62,6 +72,8 @@ module.exports = {
   win: { target: ["nsis"] },
   nsis: { oneClick: false, allowToChangeInstallationDirectory: true },
   linux: { target: ["AppImage"], category: "AudioVideo" },
+  // Official builds check GitHub for new releases (desktop/studio.cjs). A feed is
+  // only written into copies built with RELAY_UPDATE_URL, which update from it.
   publish: process.env.RELAY_UPDATE_URL
     ? [{ provider: "generic", url: process.env.RELAY_UPDATE_URL }]
     : undefined,
@@ -69,13 +81,26 @@ module.exports = {
     const fs = require("node:fs");
     const base =
       context.electronPlatformName === "darwin"
-        ? path.join(context.appOutDir, "Relay.app", "Contents", "Resources", "app")
+        ? path.join(
+            context.appOutDir,
+            "Relay.app",
+            "Contents",
+            "Resources",
+            "app",
+          )
         : path.join(context.appOutDir, "resources", "app");
     const engines = path.join(base, "vendor", "ffmpeg");
     const bundled =
       fs.existsSync(engines) &&
-      fs.readdirSync(engines, { withFileTypes: true }).some((e) => e.isDirectory());
-    if (bundled || fs.existsSync(path.join(base, "node_modules", "ffmpeg-static", "ffmpeg")))
-      throw new Error("Packages must not bundle an FFmpeg binary; Relay downloads it on first launch.");
+      fs
+        .readdirSync(engines, { withFileTypes: true })
+        .some((e) => e.isDirectory());
+    if (
+      bundled ||
+      fs.existsSync(path.join(base, "node_modules", "ffmpeg-static", "ffmpeg"))
+    )
+      throw new Error(
+        "Packages must not bundle an FFmpeg binary; Relay downloads it on first launch.",
+      );
   },
 };

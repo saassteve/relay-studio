@@ -182,9 +182,10 @@ export const DraftPlayer = forwardRef<
 
   toggleRef.current = toggle;
   // What is on screen at this moment.
-  const scene = (project.scenes || []).findLast(
-    (s) => t >= s.start && t < s.end,
-  );
+  // Sorted the way the render sorts them, so overlapping changes agree with it.
+  const scene = [...(project.scenes || [])]
+    .sort((a, b) => a.start - b.start)
+    .findLast((s) => t >= s.start && t < s.end);
   const preset = (scene?.preset || l.preset || "pip") as LayoutPreset;
   const plan = planLayout(l, preset, aspect, hasCamera && !cameraMissing);
   const zoom = project.overlays.find(
@@ -378,6 +379,7 @@ export const DraftPlayer = forwardRef<
               playsInline
               preload="auto"
               onError={() => setCameraMissing(true)}
+              onLoadedMetadata={() => setCameraMissing(false)}
             />
           </div>
         )}
@@ -386,6 +388,7 @@ export const DraftPlayer = forwardRef<
           muted={muted}
           preload="auto"
           onError={() => setVoiceMissing(true)}
+          onLoadedMetadata={() => setVoiceMissing(false)}
         />
         {effects.map((o) => (
           <div

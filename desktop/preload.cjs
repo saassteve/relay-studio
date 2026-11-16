@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld("relayDesktop", {
   openPermissionSettings: (kind) =>
     ipcRenderer.invoke("relay:permission-settings", kind),
   relaunch: () => ipcRenderer.invoke("relay:relaunch"),
+  resetScreenPermission: () =>
+    ipcRenderer.invoke("relay:reset-screen-permission"),
   prepareRecording: (options) =>
     ipcRenderer.invoke("relay:prepare-recording", options),
   cameraLayout: () => ipcRenderer.invoke("relay:camera-layout"),

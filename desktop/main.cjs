@@ -13,18 +13,21 @@ const {
   nativeImage,
   dialog,
 } = require("electron");
-const { spawn } = require("node:child_process");
+const { spawn, execFile } = require("node:child_process");
+const { randomBytes } = require("node:crypto");
+const os = require("node:os");
 const path = require("node:path");
 const fs = require("node:fs");
 let mainWindow,
   server,
   baseURL,
   selectedSource,
-  selectedBounds,
+  selectedDisplay,
   nativeStudio,
   captureUI,
   tray,
-  hiddenForRecording = false;
+  hiddenForRecording = false,
+  quitting = false;
 const STABLE_PORT = process.env.RELAY_PORT || "41730";
 const RECORDING_SHORTCUTS = {
   "Alt+Shift+P": "pause",
@@ -34,7 +37,7 @@ const RECORDING_SHORTCUTS = {
 app.setName("Relay");
 app.setAboutPanelOptions({ credits: "Built by brep · brep.ai" });
 if (!app.requestSingleInstanceLock()) app.exit(0);
-const localSecret = require("node:crypto").randomBytes(32).toString("hex");
+const localSecret = randomBytes(32).toString("hex");
 app.on("second-instance", () => {
   if (baseURL) showStudio();
 });
@@ -43,7 +46,8 @@ async function startServer() {
   const data = path.join(app.getPath("userData"), "library");
   fs.mkdirSync(data, { recursive: true });
   const root = path.resolve(__dirname, "..");
-  // An ephemeral port keeps the desktop library separate from an existing web instance.
+  // A stable port keeps local share links valid across restarts. The server falls
+  // back to any free port if this one is taken.
   const entry = path.join(root, "server", "desktop-server.mjs");
   server = spawn(process.execPath, [entry], {
     cwd: root,
@@ -61,29 +65,65 @@ async function startServer() {
   });
   server.stderr.on("data", (d) => console.error(d.toString()));
   return new Promise((resolve, reject) => {
-    let output = "";
+    let output = "",
+      ready = false;
     const timer = setTimeout(
       () =>
         reject(
           new Error(
-            "Relay’s library server did not start. Run npm run build first.",
+            app.isPackaged
+              ? "Relay’s library did not start. Try opening Relay again."
+              : "Relay’s library server did not start. Run npm run build first.",
           ),
         ),
       20000,
     );
     server.stdout.on("data", (d) => {
+      if (ready) return;
       output += d.toString();
       const m = output.match(/RELAY_READY:(http:\/\/127\.0\.0\.1:\d+)/);
       if (m) {
+        ready = true;
         clearTimeout(timer);
         resolve(m[1]);
       }
     });
     server.on("exit", (code) => {
       clearTimeout(timer);
-      reject(new Error(`Library server exited (${code}).`));
+      if (ready) void serverStopped();
+      else reject(new Error(`Library server exited (${code}).`));
     });
   });
+}
+// Once it is up, the library server should only stop when Relay does. Nothing in
+// the studio works without it, so offer a clean restart.
+async function serverStopped() {
+  // Ctrl-C in a terminal, or a shutdown, stops the server and Relay together.
+  // Let Relay's own quit arrive first.
+  await new Promise((r) => setTimeout(r, 300));
+  if (quitting) return;
+  server = undefined;
+  nativeStudio?.reset();
+  const { response } = await dialog.showMessageBox({
+    type: "error",
+    message: "Relay’s library stopped unexpectedly",
+    detail:
+      "Relay has to reopen before it can show or save recordings. Recordings already in your library are not affected.",
+    buttons: ["Reopen Relay", "Quit"],
+    defaultId: 0,
+    cancelId: 1,
+  });
+  if (response === 0) app.relaunch();
+  app.exit(0);
+}
+// Looked up on every use: the chosen display can be unplugged or re-scaled between
+// picking it and recording. If it has gone, the primary display stands in.
+function captureBounds() {
+  if (selectedDisplay === undefined) return undefined;
+  return (
+    screen.getAllDisplays().find((d) => d.id === selectedDisplay) ||
+    screen.getPrimaryDisplay()
+  ).bounds;
 }
 const isBubble = (webContents) => {
   try {
@@ -96,6 +136,7 @@ const isBubble = (webContents) => {
   }
 };
 function showStudio() {
+  if (quitting) return;
   if (!mainWindow) return void createWindow();
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
@@ -120,6 +161,7 @@ function studioURL(url) {
   }
 }
 async function createWindow() {
+  if (quitting) return;
   mainWindow = new BrowserWindow({
     width: 1450,
     height: 980,
@@ -152,6 +194,8 @@ async function createWindow() {
   const reset = () => nativeStudio?.reset();
   win.on("closed", () => {
     if (mainWindow === win) mainWindow = null;
+    // Nothing is left to bring back, so ending the recording must not reopen it.
+    hiddenForRecording = false;
     reset();
   });
   win.webContents.on("render-process-gone", reset);
@@ -253,7 +297,7 @@ app
             request.audioRequested &&
               (process.platform === "win32" ||
                 (process.platform === "darwin" &&
-                  Number(require("node:os").release().split(".")[0]) >= 23))
+                  Number(os.release().split(".")[0]) >= 23))
               ? { video: source, audio: "loopback" }
               : { video: source },
           );
@@ -265,11 +309,17 @@ app
     );
     ipcMain.handle("relay:sources", async (event) => {
       if (!trusted(event)) throw new Error("Untrusted capture request");
-      const sources = await desktopCapturer.getSources({
-        types: ["screen", "window"],
-        thumbnailSize: { width: 360, height: 210 },
-        fetchWindowIcons: false,
-      });
+      let sources;
+      try {
+        sources = await desktopCapturer.getSources({
+          types: ["screen", "window"],
+          thumbnailSize: { width: 360, height: 210 },
+          fetchWindowIcons: false,
+        });
+      } catch {
+        // On a Mac this is what a missing or out-of-date permission looks like.
+        throw new Error("screen-permission");
+      }
       return sources.map((s) => ({
         id: s.id,
         name: s.name,
@@ -286,23 +336,40 @@ app
         thumbnailSize: { width: 0, height: 0 },
       });
       const source = sources.find((s) => s.id === id);
-      selectedBounds = source?.id.startsWith("screen:")
+      selectedDisplay = source?.id.startsWith("screen:")
         ? screen
             .getAllDisplays()
-            .find((d) => String(d.id) === source.display_id)?.bounds
+            .find((d) => String(d.id) === source.display_id)?.id
         : undefined;
       nativeStudio?.resetRegion();
     });
+    // One "discard?" prompt at a time, and it belongs to the recording it was
+    // opened for: it is aborted when that recording ends.
+    let discardPrompt;
     const confirmDiscard = async () => {
-      const { response } = await dialog.showMessageBox({
+      if (discardPrompt || !nativeStudio.state().active) return;
+      const prompt = (discardPrompt = new AbortController());
+      const options = {
         type: "warning",
         message: "Discard this recording?",
         detail: "The take and its saved chunks will be deleted.",
         buttons: ["Discard", "Keep recording"],
         defaultId: 1,
         cancelId: 1,
-      });
-      if (response === 0) nativeStudio.send("cancel");
+        signal: prompt.signal,
+      };
+      try {
+        // A prompt left open after its recording ends is ignored when answered.
+        const { response } = await dialog.showMessageBox(options);
+        if (
+          response === 0 &&
+          !prompt.signal.aborted &&
+          nativeStudio.state().active
+        )
+          nativeStudio.send("cancel");
+      } finally {
+        if (discardPrompt === prompt) discardPrompt = undefined;
+      }
     };
     const toggleDraw = () => {
       const on = captureUI.toggleDraw();
@@ -311,7 +378,7 @@ app
     nativeStudio = require("./studio.cjs")({
       trusted,
       window: () => mainWindow,
-      captureBounds: () => selectedBounds,
+      captureBounds,
       onAction(action) {
         if (action === "cancel") return (void confirmDiscard(), true);
         if (action === "draw") return (toggleDraw(), true);
@@ -330,7 +397,10 @@ app
             });
         }
         if (!active) {
+          discardPrompt?.abort();
           captureUI.dispose();
+          // The recording surfaces must never leave Relay without its Dock icon.
+          if (app.dock && !app.dock.isVisible()) void app.dock.show();
           if (hiddenForRecording) showStudio();
           hiddenForRecording = false;
         }
@@ -339,7 +409,7 @@ app
       onState: (state) => updateTray(state),
     });
     captureUI = require("./capture-ui.cjs")({
-      captureBounds: () => selectedBounds,
+      captureBounds,
       region: () => nativeStudio.region(),
       baseURL: () => baseURL,
     });
@@ -349,7 +419,7 @@ app
         version: app.getVersion(),
         packaged: app.isPackaged,
         platform: process.platform,
-        osRelease: require("node:os").release(),
+        osRelease: os.release(),
         stablePort: new URL(baseURL).port === STABLE_PORT,
       };
     });
@@ -388,12 +458,32 @@ app
       );
       return true;
     });
-    ipcMain.handle("relay:relaunch", (event) => {
-      if (!trusted(event)) throw new Error("Untrusted request");
+    const relaunch = () => {
+      quitting = true;
       globalShortcut.unregisterAll();
       server?.kill();
       app.relaunch();
       app.exit(0);
+    };
+    ipcMain.handle("relay:relaunch", (event) => {
+      if (!trusted(event)) throw new Error("Untrusted request");
+      relaunch();
+    });
+    // macOS ties Screen Recording access to how an app is signed. A grant given to
+    // an older copy of Relay can still show as switched on in System Settings while
+    // being refused for this one. Clearing Relay's entry makes macOS ask again.
+    ipcMain.handle("relay:reset-screen-permission", async (event) => {
+      if (!trusted(event)) throw new Error("Untrusted request");
+      if (process.platform !== "darwin" || !app.isPackaged) return false;
+      await new Promise((done) =>
+        execFile(
+          "/usr/bin/tccutil",
+          ["reset", "ScreenCapture", "org.relayvideo.studio"],
+          () => done(),
+        ),
+      );
+      relaunch();
+      return true;
     });
     ipcMain.handle("relay:prepare-recording", async (event, options = {}) => {
       if (!trusted(event)) throw new Error("Untrusted request");
@@ -415,7 +505,7 @@ app
                 background: options.background,
               }
             : null,
-        draw: screenCapture && Boolean(selectedBounds),
+        draw: screenCapture && Boolean(captureBounds()),
       });
       if (result.cancelled && hiddenForRecording) {
         hiddenForRecording = false;
@@ -530,10 +620,7 @@ app
     Menu.setApplicationMenu(Menu.buildFromTemplate(template));
   })
   .catch((error) => {
-    require("electron").dialog.showErrorBox(
-      "Relay could not start",
-      error.message,
-    );
+    dialog.showErrorBox("Relay could not start", error.message);
     app.quit();
   });
 app.on("activate", () => {
@@ -545,6 +632,7 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 app.on("before-quit", () => {
+  quitting = true;
   globalShortcut.unregisterAll();
   server?.kill();
 });

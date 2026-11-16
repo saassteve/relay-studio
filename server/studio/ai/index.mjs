@@ -225,11 +225,24 @@ export function registerAI({ app, db, owner, admin, find, jobs }) {
         : await describeWithCompatible({ ...s, prompt });
     progress(90);
     const result = normalise(raw, duration);
+    // Some models answer with an empty object, or with an error in place of
+    // the fields asked for.
+    if (!result.title && !result.description)
+      throw problem(
+        502,
+        `${s.provider.label} replied without a title or a summary. Try again, or pick another model in Workspace settings.`,
+      );
+    // Whatever the reply left out stays as it was.
+    const existing = parseJSON(v.outline, {});
     const outline = {
-      ...parseJSON(v.outline, {}),
-      summary: result.description,
-      chapters: result.chapters,
-      actionItems: result.actionItems,
+      ...existing,
+      summary: result.description || existing.summary || "",
+      chapters: result.chapters.length
+        ? result.chapters
+        : existing.chapters || [],
+      actionItems: result.actionItems.length
+        ? result.actionItems
+        : existing.actionItems || [],
       projectSegments: JSON.stringify(project.segments),
       generatedBy: s.provider.label,
     };

@@ -1,5 +1,6 @@
 const { BrowserWindow, ipcMain, screen } = require("electron");
 const path = require("node:path");
+const windows = require("./windows.cjs");
 
 // Native recording surfaces: a countdown, a floating camera bubble and a drawing layer.
 // The countdown and bubble are excluded from capture (the camera is its own track and is
@@ -15,16 +16,8 @@ module.exports = function attachCaptureUI({ captureBounds, region, baseURL }) {
     overlay,
     drawing = false,
     bubbleSize = "m";
-  const secure = {
-    preload: path.join(__dirname, "overlay-preload.cjs"),
-    contextIsolation: true,
-    nodeIntegration: false,
-    sandbox: true,
-  };
-  const lock = (win) => {
-    win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-    win.webContents.on("will-navigate", (e) => e.preventDefault());
-  };
+  const secure = windows.secure("overlay-preload.cjs");
+  const { lock, onAllSpaces } = windows;
   const displayFor = () => {
     const bounds = captureBounds();
     return bounds
@@ -57,7 +50,7 @@ module.exports = function attachCaptureUI({ captureBounds, region, baseURL }) {
     });
     countdown.setAlwaysOnTop(true, "screen-saver", 2);
     countdown.setContentProtection(true);
-    countdown.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    onAllSpaces(countdown);
     lock(countdown);
     const win = countdown;
     return new Promise((resolve) => {
@@ -128,7 +121,7 @@ module.exports = function attachCaptureUI({ captureBounds, region, baseURL }) {
     });
     bubble.setAlwaysOnTop(true, "screen-saver", 1);
     bubble.setContentProtection(true);
-    bubble.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    onAllSpaces(bubble);
     lock(bubble);
     placeBubble(bubble, SIZES[bubbleSize]);
     bubble.on("moved", snapBubble);
@@ -193,7 +186,7 @@ module.exports = function attachCaptureUI({ captureBounds, region, baseURL }) {
     });
     overlay.setAlwaysOnTop(true, "screen-saver", 0);
     overlay.setIgnoreMouseEvents(true);
-    overlay.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    onAllSpaces(overlay);
     lock(overlay);
     overlay.on("closed", () => {
       overlay = undefined;

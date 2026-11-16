@@ -17,6 +17,8 @@ export interface Draft {
   jobId?: string;
   videoId?: string;
   error?: string;
+  // Discarded here, but the server has not confirmed deleting its copy yet.
+  discardPending?: boolean;
 }
 interface Part {
   key: string;
@@ -24,7 +26,8 @@ interface Part {
   role: TrackRole;
   seq: number;
   mime: string;
-  blob: Blob;
+  // Dropped once the server has the chunk, to free space on this device.
+  blob?: Blob;
   end: number;
   uploaded: boolean;
 }
@@ -64,11 +67,35 @@ export const listDrafts = () =>
   store<Draft[]>("drafts", "readonly", (s) => s.getAll());
 export const getDraft = (id: string) =>
   store<Draft | undefined>("drafts", "readonly", (s) => s.get(id));
-export async function updateDraft(id: string, patch: Partial<Draft>) {
-  const d = await getDraft(id);
-  if (!d) throw new Error("This local recording was not found.");
-  const next = { ...d, ...patch };
-  await store("drafts", "readwrite", (s) => s.put(next));
+// Reads and writes in one transaction, so two writers can never overwrite each
+// other with a stale copy. Pass a function to build the change from the stored draft.
+export async function updateDraft(
+  id: string,
+  patch: Partial<Draft> | ((draft: Draft) => Partial<Draft>),
+) {
+  const d = await db();
+  const next = await new Promise<Draft>((resolve, reject) => {
+    const tx = d.transaction("drafts", "readwrite"),
+      drafts = tx.objectStore("drafts"),
+      read = drafts.get(id);
+    let result: Draft | undefined;
+    read.onsuccess = () => {
+      const current = read.result as Draft | undefined;
+      if (!current) return;
+      result = {
+        ...current,
+        ...(typeof patch === "function" ? patch(current) : patch),
+      };
+      drafts.put(result);
+    };
+    tx.oncomplete = () =>
+      result
+        ? resolve(result)
+        : reject(new Error("This local recording was not found."));
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () =>
+      reject(tx.error || new Error("Local storage is unavailable."));
+  });
   changed();
   return next;
 }
@@ -126,7 +153,7 @@ export function syncDraft(id: string): Promise<void> {
         }),
       });
       const pending = (await parts(id))
-        .filter((p) => !p.uploaded)
+        .filter((p) => !p.uploaded && p.blob)
         .sort((a, b) => a.seq - b.seq);
       for (const part of pending) {
         const response = await fetch(
@@ -148,8 +175,10 @@ export function syncDraft(id: string): Promise<void> {
         // Discarded while this chunk was uploading: don't write it back.
         const current = await getDraft(id);
         if (!current || current.status === "discarded") return;
+        // The server has this chunk on disk now and nothing reads the local copy
+        // again, so only the record is kept. Long takes don't fill this device.
         await store("parts", "readwrite", (s) =>
-          s.put({ ...part, uploaded: true }),
+          s.put({ ...part, blob: undefined, uploaded: true }),
         );
       }
       draft = (await getDraft(id))!;
@@ -258,11 +287,29 @@ export async function discardDraft(id: string) {
     if (job && job.status !== "failed")
       throw new Error("Wait for this recording to finish processing.");
   }
-  await updateDraft(id, { status: "discarded" });
+  await updateDraft(id, { status: "discarded", discardPending: true });
   for (const part of await parts(id))
     await store("parts", "readwrite", (s) => s.delete(part.key));
-  void api(`/api/recordings/${id}`, { method: "DELETE" }).catch(() => {});
+  void discardRemote(id);
   changed();
+}
+// Deletes the server's copy of a discarded recording. If the server can't be
+// reached, the draft stays marked and sync tries again later.
+const discarding = new Map<string, number>();
+async function discardRemote(id: string) {
+  if (Date.now() - (discarding.get(id) || 0) < 15000) return;
+  discarding.set(id, Date.now());
+  // Let an upload that is under way notice the discard first, so it can't
+  // create the server's copy just after this has asked to delete it.
+  await running.get(id);
+  try {
+    await api(`/api/recordings/${id}`, { method: "DELETE" });
+  } catch (e) {
+    // Never reached the server in the first place: nothing left to delete.
+    if ((e as { status?: number }).status !== 404) return;
+  }
+  discarding.delete(id);
+  await updateDraft(id, { discardPending: false }).catch(() => {});
 }
 export function startDraftSync(onComplete: () => void) {
   let previous: Set<string> | undefined;
@@ -279,6 +326,8 @@ export function startDraftSync(onComplete: () => void) {
       }
       if (["queued", "processing", "recording"].includes(draft.status))
         void syncDraft(draft.id);
+      if (draft.status === "discarded" && draft.discardPending)
+        void discardRemote(draft.id);
     }
   };
   const online = () => void tick();

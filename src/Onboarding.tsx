@@ -26,9 +26,9 @@ import {
 import { api, type Job, type BubbleSize } from "./types";
 import { defaults, savePreferences, type Preferences } from "./prefs";
 import { CameraLookPicker } from "./CameraLook";
+import { deviceMissing, openInput } from "./media";
+import { isLocal } from "./local";
 import "./onboarding.css";
-// A link to this computer only opens here, so setup doesn't promise one.
-const local = ["127.0.0.1", "localhost"].includes(location.hostname);
 
 type Step = "welcome" | "name" | "permissions" | "check" | "prefs" | "ready";
 type Permission =
@@ -146,7 +146,7 @@ export function Onboarding({
           Open source and local-first. Your recordings stay on this
           {window.relayDesktop
             ? " Mac"
-            : ["127.0.0.1", "localhost"].includes(location.hostname)
+            : isLocal
               ? " computer"
               : " server"}{" "}
           until you share them.
@@ -331,8 +331,8 @@ function Welcome({
       </h1>
       <p className="lede">
         Record your screen, camera and voice, edit by deleting words, and{" "}
-        {local ? "send the finished video" : "send one link"}. Relay does it on
-        your own machine, with no plan limits.
+        {isLocal ? "send the finished video" : "send one link"}. Relay does it
+        on your own machine, with no plan limits.
       </p>
       <div className="promise-grid">
         <div>
@@ -569,6 +569,13 @@ function DeviceCheck({
     const t = setTimeout(refresh, 1200);
     return () => clearTimeout(t);
   }, [cameraId]);
+  // A remembered device that has gone (unplugged, or chosen in another browser)
+  // is forgotten, so the lists show what is really being used.
+  useEffect(() => {
+    if (deviceMissing(devices, "camera", cameraId)) update({ cameraId: "" });
+    if (deviceMissing(devices, "microphone", microphoneId))
+      update({ microphoneId: "" });
+  }, [devices]);
   useEffect(() => {
     let stream: MediaStream | undefined,
       context: AudioContext | undefined,
@@ -577,10 +584,10 @@ function DeviceCheck({
       hot = 0;
     setMicError("");
     setHeard(false);
-    navigator.mediaDevices
-      ?.getUserMedia({
-        audio: microphoneId ? { deviceId: { exact: microphoneId } } : true,
-      })
+    if (!navigator.mediaDevices) return;
+    openInput("microphone", microphoneId, {}, () =>
+      update({ microphoneId: "" }),
+    )
       .then(async (s) => {
         if (cancelled) return s.getTracks().forEach((t) => t.stop());
         stream = s;
@@ -826,22 +833,22 @@ function PrefsStep({
           <span>
             <strong>When I finish recording</strong>
             <small>
-              {local
+              {isLocal
                 ? "Open the editor to tidy it up, then download or share it."
                 : "Paste the link anywhere. It plays while you polish."}
             </small>
           </span>
           <Choice
             label="When I finish recording"
-            value={local ? "open-editor" : v("afterRecording")}
+            value={isLocal ? "open-editor" : v("afterRecording")}
             options={[
-              ...(local
+              ...(isLocal
                 ? []
                 : ([["copy-link", "Copy link + open editor"]] as [
                     "copy-link",
                     string,
                   ][])),
-              ["open-editor", local ? "Open the editor" : "Just open editor"],
+              ["open-editor", isLocal ? "Open the editor" : "Just open editor"],
             ]}
             onChange={(afterRecording) => update({ afterRecording })}
           />

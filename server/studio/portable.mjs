@@ -6,8 +6,8 @@ import {
   createReadStream,
   createWriteStream,
   mkdtempSync,
+  mkdirSync,
   readFileSync,
-  existsSync,
   rmSync,
   renameSync,
   statSync,
@@ -17,7 +17,8 @@ import {
 } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import path from "node:path";
-import { getProject, validateProject } from "./project.mjs";
+import { getProject, validateProject, cleanOutline } from "./project.mjs";
+import { probe } from "./render.mjs";
 import { parseJSON, problem, safeMime } from "./schema.mjs";
 const hashFile = async (file) => {
   const hash = createHash("sha256");
@@ -172,9 +173,7 @@ export function registerPortable({
               head.subarray(4, 8).toString() !== "ftyp"
             )
               throw problem(415, "A bundled source is not readable media.");
-            const info = await import("./render.mjs").then((m) =>
-              m.probe(file),
-            );
+            const info = await probe(file);
             if (!info.hasAudio && !info.hasVideo)
               throw problem(415, "A bundled source is not readable media.");
             const filename = `${id}-${asset.role}${path.extname(asset.name)}`;
@@ -229,7 +228,7 @@ export function registerPortable({
                       w.end > w.start,
                   ),
               ),
-              JSON.stringify(s.outline || {}),
+              JSON.stringify(cleanOutline(s.outline)),
             );
             for (const a of row.assets)
               db.prepare("INSERT INTO assets VALUES(?,?,?,?,?,?)").run(
@@ -322,9 +321,7 @@ async function unzip(file, directory) {
           throw problem(413, "The project manifest is too large.");
         const dest = path.join(directory, name);
         if (name.startsWith("assets/"))
-          (await import("node:fs")).mkdirSync(path.dirname(dest), {
-            recursive: true,
-          });
+          mkdirSync(path.dirname(dest), { recursive: true });
         const input = await new Promise((resolve, reject) =>
           zip.openReadStream(entry, (e, s) => (e ? reject(e) : resolve(s))),
         );

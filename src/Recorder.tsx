@@ -11,11 +11,16 @@ import {
   ArrowUpRight,
   Check,
   LoaderCircle,
-  ChevronRight,
   RotateCcw,
   Crop,
 } from "lucide-react";
-import { acquireCapture, type CaptureSession } from "./media";
+import {
+  acquireCapture,
+  deviceMissing,
+  openInput,
+  type CaptureOptions,
+  type CaptureSession,
+} from "./media";
 import { api, clock, type Clip, type Mode, type DesktopSource } from "./types";
 import { RecordingEngine } from "./RecordingEngine";
 import {
@@ -29,16 +34,25 @@ import { cachedPreferences, pref, savePreferences } from "./prefs";
 import { CameraLookPicker } from "./CameraLook";
 import { confirmDialog, radio } from "./Modal";
 import type { CameraLook } from "./cameraEffects";
+import { isLocal } from "./local";
 
-// A link to this computer only opens here, so it is never offered as a way to share.
-const localOnly = ["127.0.0.1", "localhost"].includes(location.hostname);
+type Phase =
+  "setup" | "preparing" | "recording" | "paused" | "review" | "saving";
+type Region = CaptureOptions["region"];
+const SOURCES = {
+  screen: "Screen sharing",
+  camera: "Your camera",
+  microphone: "Your microphone",
+  system: "Computer sound",
+};
 export function Recorder({
   onClose,
   onSaved,
   guard,
 }: {
   onClose: () => void;
-  onSaved: (c: Clip, copied?: boolean) => void;
+  // `linkFailed`: a share link was asked for but could not be made.
+  onSaved: (c: Clip, copied?: boolean, linkFailed?: boolean) => void;
   guard?: React.RefObject<() => Promise<boolean>>;
 }) {
   const saved = cachedPreferences();
@@ -49,10 +63,13 @@ export function Recorder({
     ),
     [mic, setMic] = useState(true),
     [quality, setQualityState] = useState<number>(pref("quality")),
-    [phase, setPhase] = useState("setup"),
+    [phase, setPhase] = useState<Phase>("setup"),
     [seconds, setSeconds] = useState(0),
     [error, setError] = useState(""),
+    [screenBlocked, setScreenBlocked] = useState(false),
     [notice, setNotice] = useState(""),
+    // Devices that dropped out while recording. The take carries on without them.
+    [lost, setLost] = useState<string[]>([]),
     [micTest, setMicTest] = useState(""),
     [title, setTitle] = useState(""),
     [sources, setSources] = useState<DesktopSource[] | null>(null),
@@ -72,9 +89,6 @@ export function Recorder({
     [notes, setNotes] = useState(""),
     [meter, setMeter] = useState(0),
     [crop, setCrop] = useState(false),
-    [region, setRegion] = useState<
-      { x: number; y: number; w: number; h: number } | undefined
-    >(),
     [progress, setProgress] = useState(""),
     [draft, setDraft] = useState<Draft | null>(null);
   // Remember recorder choices for next time.
@@ -120,6 +134,18 @@ export function Recorder({
       document.title = before;
     };
   }, [phase, seconds]);
+  // Reloading or closing the tab would end the take, so the browser asks first.
+  // The Mac app has no such prompt: there it would only make the window refuse to close.
+  useEffect(() => {
+    if ((phase !== "recording" && phase !== "paused") || window.relayDesktop)
+      return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    addEventListener("beforeunload", warn);
+    return () => removeEventListener("beforeunload", warn);
+  }, [phase]);
   const countdownDone = useRef<((go: boolean) => void) | null>(null);
   const runCountdown = (seconds: number) =>
     new Promise<boolean>((resolve) => {
@@ -162,11 +188,15 @@ export function Recorder({
     tick = useRef<ReturnType<typeof setInterval> | undefined>(undefined),
     mounted = useRef(true);
   useEffect(() => {
-    void navigator.mediaDevices
-      ?.enumerateDevices()
-      .then(setDevices)
-      .catch(() => {});
+    const list = () =>
+      void navigator.mediaDevices
+        ?.enumerateDevices()
+        .then(setDevices)
+        .catch(() => {});
+    list();
+    navigator.mediaDevices?.addEventListener?.("devicechange", list);
     return () => {
+      navigator.mediaDevices?.removeEventListener?.("devicechange", list);
       mounted.current = false;
       clearInterval(tick.current);
       if (engine.current && !engine.current.stopped) void engine.current.stop();
@@ -179,7 +209,15 @@ export function Recorder({
       });
     };
   }, []);
-  const finishing = useRef(false);
+  // A remembered device that has gone (unplugged, or chosen in another browser)
+  // is forgotten, so the lists always show what will really be used.
+  useEffect(() => {
+    if (deviceMissing(devices, "camera", cameraId)) setCameraId("");
+    if (deviceMissing(devices, "microphone", microphoneId)) setMicrophoneId("");
+  }, [devices]);
+  const finishing = useRef(false),
+    // Why the take ended early, if it did. Never cleared by finishing.
+    failure = useRef("");
   const finish = async () => {
     if (finishing.current) return;
     finishing.current = true;
@@ -214,7 +252,7 @@ export function Recorder({
       });
       if (d && mounted.current) {
         setDraft(d);
-        setError(d.error || "");
+        setError(failure.current || d.error || "");
         setSeconds(d.duration);
         setPhase("review");
       }
@@ -264,16 +302,29 @@ export function Recorder({
       window.relayDesktop?.onPointer?.((point) => engine.current?.point(point)),
     [],
   );
-  const start = async (selectedRegion?: typeof region) => {
+  const start = async (selectedRegion?: Region) => {
     setError("");
+    setNotice("");
+    setLost([]);
+    failure.current = "";
     setPhase("preparing");
     try {
+      let camera = cameraId;
       const session = await acquireCapture(mode, mic, quality, {
         microphoneId,
         cameraId,
         systemAudio,
         region: selectedRegion,
         look,
+        onMissingDevice: (device) => {
+          if (device === "camera") {
+            camera = "";
+            setCameraId("");
+          } else setMicrophoneId("");
+          setNotice(
+            `Your usual ${device} wasn’t found, so the default one is being used.`,
+          );
+        },
       });
       capture.current = session;
       if (!mounted.current) {
@@ -294,7 +345,7 @@ export function Recorder({
                 countdown: seconds,
                 bubble: mode === "screen-camera" && pref("bubble"),
                 bubbleSize: pref("bubbleSize"),
-                cameraId,
+                cameraId: camera,
                 filter: look.filter,
                 background: look.background,
               })
@@ -308,12 +359,28 @@ export function Recorder({
         if (mounted.current) setPhase("setup");
         return;
       }
+      // "Stop sharing" during the countdown leaves nothing to record.
+      const ended = (
+        Object.keys(session.tracks) as (keyof typeof SOURCES)[]
+      ).filter((role) =>
+        session.tracks[role]!.getTracks().some((t) => t.readyState === "ended"),
+      );
+      if (ended.length)
+        throw new Error(
+          `${SOURCES[ended.includes("screen") ? "screen" : ended[0]]} stopped before the recording began. Press Start recording to try again.`,
+        );
       finishing.current = false;
       const recording = new RecordingEngine(session);
       engine.current = recording;
+      // The engine stops the take itself; the timer below then finishes it.
       recording.onFailure = (message) => {
+        failure.current = message;
         setError(message);
-        setPhase("paused");
+      };
+      recording.onNotice = (message) => {
+        setLost((all) => (all.includes(message) ? all : [...all, message]));
+        if (localStorage.getItem("relay-native-notifications") === "true")
+          window.relayDesktop?.notify?.(message);
       };
       await recording.start();
       setPhase("recording");
@@ -364,10 +431,13 @@ export function Recorder({
   };
   const begin = async () => {
     if (window.relayDesktop && mode !== "camera") {
+      setScreenBlocked(false);
       try {
         setSources(await window.relayDesktop.sources());
       } catch (e) {
-        setError(String(e));
+        if (/screen-permission|Failed to get sources/.test(String(e)))
+          setScreenBlocked(true);
+        else setError("Relay couldn’t list your screens. Try again.");
       }
     } else await start();
   };
@@ -375,7 +445,7 @@ export function Recorder({
     const id = draft?.id || engine.current?.id;
     if (!id) return;
     setPhase("saving");
-    let copied = false;
+    let v: Clip;
     try {
       await queueDraft(
         id,
@@ -384,9 +454,25 @@ export function Recorder({
         seconds,
         draft?.meta,
       );
-      let v = await waitForDraft(id, setProgress);
-      if (autoShare && !localOnly) {
+      v = await waitForDraft(id, setProgress);
+    } catch (e) {
+      setError((e as Error).message);
+      setPhase("review");
+      return;
+    }
+    // "Continue in background" closed this dialog: the video is in the library
+    // and nothing more happens here.
+    if (!mounted.current) return;
+    // From here the video is saved. A link that can't be made must not hold it up.
+    let copied = false,
+      linkFailed = false;
+    if (autoShare && !isLocal) {
+      try {
         v = await api<Clip>(`/api/videos/${v.id}/share`, { method: "POST" });
+      } catch {
+        linkFailed = true;
+      }
+      if (!linkFailed && mounted.current)
         try {
           await navigator.clipboard.writeText(
             `${location.origin}/s/${v.token}`,
@@ -395,12 +481,8 @@ export function Recorder({
         } catch {
           /* The link remains available in Share. */
         }
-      }
-      if (mounted.current) onSaved(v, copied);
-    } catch (e) {
-      setError((e as Error).message);
-      setPhase("review");
     }
+    if (mounted.current) onSaved(v, copied, linkFailed);
   };
   return (
     <div className="recorder-body">
@@ -425,12 +507,11 @@ export function Recorder({
                 onClick={async () => {
                   try {
                     await window.relayDesktop!.selectSource(s.id);
-                    let selected: typeof region = undefined;
+                    let selected: Region;
                     if (crop && window.relayDesktop?.selectRegion) {
                       const r = await window.relayDesktop.selectRegion(s.id);
                       if (!r) return;
                       selected = r;
-                      setRegion(r);
                     }
                     setSources(null);
                     void start(selected);
@@ -629,13 +710,12 @@ export function Recorder({
                       className="text-button"
                       onClick={async () => {
                         try {
-                          const s = await navigator.mediaDevices.getUserMedia({
-                            audio: {
-                              deviceId: microphoneId
-                                ? { exact: microphoneId }
-                                : undefined,
-                            },
-                          });
+                          const s = await openInput(
+                            "microphone",
+                            microphoneId,
+                            {},
+                            () => setMicrophoneId(""),
+                          );
                           const a = new AudioContext(),
                             meter = a.createAnalyser();
                           a.createMediaStreamSource(s).connect(meter);
@@ -759,7 +839,8 @@ export function Recorder({
               />
             </label>
           )}
-          {phase === "review" && !localOnly && (
+          {/* A link to this computer only opens here, so it is never offered as a way to share. */}
+          {phase === "review" && !isLocal && (
             <label className="check-label">
               <input
                 type="checkbox"
@@ -769,11 +850,50 @@ export function Recorder({
               Copy a share link when it’s ready
             </label>
           )}
+          {screenBlocked && (
+            <div className="error screen-blocked" role="alert">
+              <p>
+                macOS isn’t letting Relay record the screen. Turn Relay on in
+                System Settings → Privacy & Security → Screen & System Audio
+                Recording, then reopen Relay.
+              </p>
+              <p>
+                Already switched on? That can be a leftover from an older copy
+                of Relay. Resetting it makes macOS ask again.
+              </p>
+              <div className="actions">
+                <button
+                  className="btn small"
+                  onClick={() =>
+                    void window.relayDesktop?.openPermissionSettings?.("screen")
+                  }
+                >
+                  Open System Settings
+                </button>
+                {window.relayDesktop?.resetScreenPermission && (
+                  <button
+                    className="btn small"
+                    onClick={() =>
+                      void window.relayDesktop?.resetScreenPermission?.()
+                    }
+                  >
+                    Reset and reopen Relay
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
           {error && (
             <div className="error" role="alert">
               {error}
             </div>
           )}
+          {phase !== "setup" &&
+            lost.map((message) => (
+              <p className="rec-notice is-warning" role="alert" key={message}>
+                {message}
+              </p>
+            ))}
           {notice && ["recording", "paused"].includes(phase) && (
             <p className="rec-notice">{notice}</p>
           )}

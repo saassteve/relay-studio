@@ -12,6 +12,7 @@ import {
   type CameraLook,
   type CameraPipeline,
 } from "./cameraEffects";
+import { openInput } from "./media";
 import "./camera-look.css";
 
 // Live preview plus filter and background choices. The preview runs the same
@@ -33,17 +34,30 @@ export function CameraLookPicker({
   const latest = useRef(look);
   latest.current = look;
   const [error, setError] = useState(""),
+    [backgroundError, setBackgroundError] = useState(""),
     [preparing, setPreparing] = useState(false),
     [custom, setCustom] = useState(() => customBackground());
+  // Shows a spinner while a background gets ready, and says so if it can't start.
+  const prepare = (p: CameraPipeline) => {
+    const ready = p.ready,
+      current = () => pipeline.current === p && p.ready === ready;
+    setBackgroundError("");
+    setPreparing(latest.current.background !== "none");
+    void ready
+      .catch(
+        () =>
+          current() && setBackgroundError("That background couldn’t start."),
+      )
+      .finally(() => current() && setPreparing(false));
+  };
   useEffect(() => {
     let raw: MediaStream | undefined,
       cancelled = false;
     setError("");
-    void navigator.mediaDevices
-      ?.getUserMedia({
-        video: cameraId ? { deviceId: { exact: cameraId } } : true,
-        audio: false,
-      })
+    if (!navigator.mediaDevices) return;
+    // The parent clears a remembered camera that has gone; meanwhile the preview
+    // falls back to the default one.
+    void openInput("camera", cameraId)
       .then(async (s) => {
         if (cancelled) return s.getTracks().forEach((t) => t.stop());
         raw = s;
@@ -51,6 +65,7 @@ export function CameraLookPicker({
         if (cancelled) return p.stop();
         pipeline.current = p;
         p.setLook(latest.current);
+        prepare(p);
         if (video.current) video.current.srcObject = p.stream;
       })
       .catch((e) =>
@@ -73,10 +88,7 @@ export function CameraLookPicker({
     const p = pipeline.current;
     if (!p) return;
     p.setLook(latest.current);
-    if (look.background !== "none") {
-      setPreparing(true);
-      void p.ready.finally(() => setPreparing(false));
-    }
+    prepare(p);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [look.filter, look.background]);
   return (
@@ -87,10 +99,10 @@ export function CameraLookPicker({
         aria-label="Camera preview"
       >
         <video ref={video} autoPlay muted playsInline />
-        {error && (
-          <span className="look-empty">
+        {(error || backgroundError) && (
+          <span className="look-empty" role="alert">
             <Camera size={24} />
-            <small>{error}</small>
+            <small>{error || backgroundError}</small>
           </span>
         )}
         {preparing && !error && (

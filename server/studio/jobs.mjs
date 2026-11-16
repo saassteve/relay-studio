@@ -97,9 +97,11 @@ export function createJobs(db) {
         throw problem(409, "Only failed jobs can be retried.");
       if (j.type === "finish-recording") {
         const row = db.prepare("SELECT payload FROM jobs WHERE id=?").get(id);
-        db.prepare("UPDATE recordings SET status='processing' WHERE id=?").run(
-          parseJSON(row.payload, {}).recordingId,
-        );
+        // Only a recording that is waiting goes back to work: one that has
+        // since been finished or discarded stays as it is.
+        db.prepare(
+          "UPDATE recordings SET status='processing' WHERE id=? AND status='interrupted'",
+        ).run(parseJSON(row.payload, {}).recordingId);
       }
       db.prepare(
         "UPDATE jobs SET status='queued',error=NULL,progress=0 WHERE id=?",
