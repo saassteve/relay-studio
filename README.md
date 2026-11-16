@@ -64,6 +64,8 @@ curl -fsSL https://raw.githubusercontent.com/saassteve/relay-studio/main/install
 2. **Open the DMG** and drag **Relay** into **Applications**.
 3. **Open Relay.** It is signed and notarized by Apple, so it opens like any other app. The first time, macOS asks you to confirm that you want to open an app downloaded from the internet.
 
+**Seeing "Relay was blocked to protect your Mac"?** That is an older copy of Relay from before version 0.6.1, which was not notarized. Drag the new Relay into Applications and choose **Replace**, or run the Terminal command above, which swaps it for you.
+
 </details>
 
 On first launch Relay downloads its video engine (about 30 MB, once). Then a one-minute setup walks you through permissions, a camera and mic check, and your preferences.
