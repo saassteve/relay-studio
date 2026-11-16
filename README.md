@@ -183,7 +183,7 @@ Screen and camera, screen only, or camera only, from a display, a window or any 
 
 On your Mac, **Send** gives you the finished file, named after your video, ready to drop into Slack, email or anywhere else.
 
-Connect a Relay server in Settings and **Send** gives you a link anyone can open, which keeps playing your latest version each time you update it. Run the server yourself for free, or use [Relay Cloud](docs/CLOUD.md), hosted for you by brep. Links can have passwords, expiry dates and invite-only access.
+Connect a Relay server in Settings and **Send** gives you a link anyone can open, which keeps playing your latest version each time you update it. The server is one you [run yourself](docs/LINKS.md), for free. Links can have passwords, expiry dates and invite-only access.
 
 Viewers get a clean player with speed control and captions. They can comment at the exact second, reply and react, and you see who watched and how far.
 
@@ -248,7 +248,7 @@ Nothing leaves your Mac unless you send it. The Mac app needs no sign-up and sen
 
 AI providers are off until you connect one, and Relay asks before a transcript leaves your computer.
 
-Share links from the Mac app point to your own computer, so they work while Relay is running. For links that work for anyone, anywhere, [connect a Relay server](docs/CLOUD.md): only the finished videos you choose to send go there.
+Share links from the Mac app point to your own computer, so they work while Relay is running. For links that work for anyone, anywhere, [connect a Relay server](docs/LINKS.md): only the finished videos you choose to send go there.
 
 ## Good to know
 

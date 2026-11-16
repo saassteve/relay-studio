@@ -263,6 +263,7 @@ export function AISettings({ notify }: { notify: (s: string) => void }) {
                     body: JSON.stringify(body()),
                   });
                   await load();
+                  dispatchEvent(new CustomEvent("relay:ai-changed"));
                   notify(`Connected to ${current.label}`);
                 })
               }
@@ -285,6 +286,7 @@ export function AISettings({ notify }: { notify: (s: string) => void }) {
                       body: JSON.stringify({ provider: "" }),
                     });
                     await load();
+                    dispatchEvent(new CustomEvent("relay:ai-changed"));
                     notify("AI disconnected");
                   })
                 }

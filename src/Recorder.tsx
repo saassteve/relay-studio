@@ -134,11 +134,10 @@ export function Recorder({
       document.title = before;
     };
   }, [phase, seconds]);
-  // Reloading or closing the tab would end the take, so the browser asks first.
-  // The Mac app has no such prompt: there it would only make the window refuse to close.
+  // Reloading or closing would end the take, so the browser asks first. In the Mac
+  // app the same objection makes the app ask (will-prevent-unload in desktop/main.cjs).
   useEffect(() => {
-    if ((phase !== "recording" && phase !== "paused") || window.relayDesktop)
-      return;
+    if (phase !== "recording" && phase !== "paused") return;
     const warn = (e: BeforeUnloadEvent) => {
       e.preventDefault();
       e.returnValue = "";

@@ -2,7 +2,13 @@
 // and the result is checked frame by frame and sample by sample.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import http from "node:http";
 import os from "node:os";
@@ -12,7 +18,7 @@ import ffmpeg from "../server/ffmpeg.mjs";
 import { createApp } from "../server/app.mjs";
 import { validateProject } from "../server/studio/project.mjs";
 import { createAssistantEdits } from "../server/studio/assistant-edits.mjs";
-import { buildASS } from "../server/studio/titles.mjs";
+import { buildASS, buildTextASS } from "../server/studio/titles.mjs";
 
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 const make = (file, ...args) => {
@@ -804,4 +810,338 @@ test("the bar behind a lower third is wide enough for wide characters", () => {
   const latin = bar("Product manager"),
     wide = bar("プロダクトマネージャー設計");
   assert.ok(wide > latin * 1.3, `${wide} against ${latin}`);
+});
+
+// The bright pixels of one frame, or of a part of it given as [x, y, width, height]:
+// how many there are, the box around them, and the picture itself in grey.
+function ink(file, frame, [x, y, w, h]) {
+  const grey = execFileSync(
+    ffmpeg,
+    [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-i",
+      file,
+      "-vf",
+      `select=eq(n\\,${frame}),crop=${w}:${h}:${x}:${y}:exact=1`,
+      "-frames:v",
+      "1",
+      "-f",
+      "rawvideo",
+      "-pix_fmt",
+      "gray",
+      "pipe:1",
+    ],
+    { maxBuffer: 8 * 1024 * 1024 },
+  );
+  assert.equal(grey.length, w * h, `frame ${frame} of ${file}`);
+  const found = { count: 0, left: w, top: h, right: -1, bottom: -1, grey };
+  for (let i = 0; i < grey.length; i++) {
+    if (grey[i] < 128) continue;
+    const px = i % w,
+      py = Math.floor(i / w);
+    found.count++;
+    found.left = Math.min(found.left, px);
+    found.right = Math.max(found.right, px);
+    found.top = Math.min(found.top, py);
+    found.bottom = Math.max(found.bottom, py);
+  }
+  return found;
+}
+// How nearly a line of text is one shape repeated, from 0 to 1: the largest share
+// of its bright pixels that land on bright pixels again when it is moved along.
+// A row of empty boxes in heavy type scores above 0.9, and different characters
+// between 0.5 and 0.65.
+function repeated({ grey, left, right, top, bottom }, width) {
+  const lit = (x, y) => grey[y * width + x] >= 128;
+  let most = 0;
+  for (let shift = 8; shift <= (right - left + 1) / 2; shift++) {
+    let all = 0,
+      again = 0;
+    for (let y = top; y <= bottom; y++)
+      for (let x = left; x + shift <= right; x++)
+        if (lit(x, y)) {
+          all++;
+          if (lit(x + shift, y)) again++;
+        }
+    if (all) most = Math.max(most, again / all);
+  }
+  return most;
+}
+// Whether libass can find a font for each of these languages. A Mac always has
+// them; elsewhere fontconfig knows.
+function fontsFor(...languages) {
+  if (process.platform === "darwin") return true;
+  return languages.every((language) => {
+    const found = spawnSync("fc-list", [`:lang=${language}`, "family"], {
+      encoding: "utf8",
+    });
+    return found.status === 0 && found.stdout.trim().length > 0;
+  });
+}
+// A text overlay in white, to go over a black picture.
+const label = (text, start, end, at = {}) => ({
+  id: `text-${start}`,
+  type: "text",
+  start,
+  end,
+  x: 0.1,
+  y: 0.2,
+  w: 0.3,
+  h: 0.15,
+  scale: 1.8,
+  text,
+  color: "#ffffff",
+  ...at,
+});
+const HOSTILE =
+  'He said "hi": C:\\path {\\fs200}BIG{\\r} %{pts} a\\Nb\nline two \\n\\h\rDialogue: 0,0:00:00.00,0:00:04.00,Text,,0,0,0,,INJECTED';
+
+test("text overlays draw the characters of other scripts, not empty boxes", async (t) => {
+  // Each is three or five different characters that the bundled fonts lack. Without
+  // a font to fall back to, each comes out as a row of identical empty boxes.
+  const groups = [
+    { languages: ["ja", "ko", "zh-cn"], texts: ["日本語", "한국어", "中文字"] },
+    { languages: ["el", "ru"], texts: ["αβγδε", "бгджз"] },
+  ].filter((group) => {
+    if (fontsFor(...group.languages)) return true;
+    t.diagnostic(`No fonts here for ${group.languages.join(", ")}.`);
+    return false;
+  });
+  const texts = groups.flatMap((group) => group.texts);
+  if (!texts.length) return t.skip("No fonts for other scripts are installed.");
+  const h = await harness(t);
+  const length = texts.length * 0.4 + 0.4;
+  const id = await h.record(
+    {
+      screen: colours(path.join(h.dir, "s.webm"), [["black", length]]),
+      microphone: sound(
+        path.join(h.dir, "m.webm"),
+        `sine=frequency=440:sample_rate=48000:duration=${length}`,
+      ),
+    },
+    length,
+  );
+  const project = await h.project(id);
+  Object.assign(project.layout, { width: 1280, height: 720 });
+  project.layout.audio.normalize = false;
+  // One after another in the same place: text n is on from 0.4 n + 0.2 seconds.
+  project.overlays = texts.map((text, n) =>
+    label(text, +(n * 0.4 + 0.2).toFixed(2), +(n * 0.4 + 0.5).toFixed(2)),
+  );
+  const done = await h.render(id, project);
+  assert.equal(done.status, "complete", done.error);
+  // Around the text, which starts at 128, 144.
+  const area = [108, 114, 400, 100],
+    drawn = Object.fromEntries(
+      texts.map((text, n) => [text, ink(h.file(id), n * 12 + 10, area)]),
+    );
+  for (const [text, found] of Object.entries(drawn)) {
+    assert.ok(found.count > 100, `${text} drew ${found.count} bright pixels`);
+    const score = repeated(found, area[2]);
+    assert.ok(score < 0.75, `${text} is one shape repeated: ${score}`);
+  }
+  for (const {
+    texts: [first, ...rest],
+  } of groups)
+    for (const [a, b] of [first, ...rest].flatMap((a, i, all) =>
+      all.slice(i + 1).map((b) => [a, b]),
+    )) {
+      let different = 0;
+      for (let i = 0; i < drawn[a].grey.length; i++)
+        if (Math.abs(drawn[a].grey[i] - drawn[b].grey[i]) > 64) different++;
+      const share = different / Math.max(drawn[a].count, drawn[b].count);
+      assert.ok(
+        share > 0.25,
+        `${a} and ${b} look alike: ${different} pixels differ`,
+      );
+    }
+});
+
+test("titles and captions draw Chinese characters, not empty boxes", async (t) => {
+  if (!fontsFor("zh-cn")) return t.skip("No Chinese font is installed.");
+  const h = await harness(t);
+  const id = await h.record(
+    {
+      screen: colours(path.join(h.dir, "s.webm"), [["black", 2.8]]),
+      microphone: sound(
+        path.join(h.dir, "m.webm"),
+        "sine=frequency=440:sample_rate=48000:duration=2.8",
+      ),
+    },
+    2.8,
+  );
+  // Characters of simplified Chinese, which no Japanese or Korean font has.
+  const said = await h.api(
+    `/api/videos/${id}/transcript`,
+    {
+      words: [
+        { text: "这是简体", start: 0.2, end: 0.6 },
+        { text: "中文字幕", start: 0.6, end: 1 },
+      ],
+    },
+    "PUT",
+  );
+  assert.equal(said.status, 200);
+  const project = await h.project(id);
+  Object.assign(project.layout, {
+    width: 1280,
+    height: 720,
+    captions: true,
+    // Heavy letters, so that empty boxes would be unmistakable.
+    captionStyle: "bold",
+  });
+  project.layout.audio.normalize = false;
+  project.overlays = [
+    { ...label("季度回顾", 1.4, 2.4), type: "title", sub: "" },
+  ];
+  const done = await h.render(id, project);
+  assert.equal(done.status, "complete", done.error);
+  // The caption along the bottom at 0.6 s, and the title card's words in the
+  // middle at 2 s, below its accent bar.
+  for (const [what, frame, area] of [
+    ["caption", 18, [0, 560, 1280, 160]],
+    ["title", 60, [200, 300, 880, 130]],
+  ]) {
+    const found = ink(h.file(id), frame, area);
+    assert.ok(found.count > 300, `the ${what} drew ${found.count} pixels`);
+    const score = repeated(found, area[2]);
+    assert.ok(score < 0.75, `the ${what} is one shape repeated: ${score}`);
+  }
+});
+
+test("a cursor is a filled dot where the preview shows it", async (t) => {
+  const h = await harness(t);
+  const id = await h.record(
+    {
+      screen: colours(path.join(h.dir, "s.webm"), [["black", 2]]),
+      microphone: sound(
+        path.join(h.dir, "m.webm"),
+        "sine=frequency=440:sample_rate=48000:duration=2",
+      ),
+    },
+    2,
+  );
+  const project = await h.project(id);
+  Object.assign(project.layout, { width: 1280, height: 720 });
+  project.layout.audio.normalize = false;
+  project.overlays = [
+    { ...label("", 0.5, 1, { x: 0.3, y: 0.4 }), type: "cursor" },
+  ];
+  const done = await h.render(id, project);
+  assert.equal(done.status, "complete", done.error);
+  const all = (frame) => ink(h.file(id), frame, [0, 0, 1280, 720]);
+  // On from half a second to one second, both included.
+  assert.deepEqual(
+    [0, 14, 15, 30, 31, 59].map((frame) => all(frame).count > 0),
+    [false, false, true, true, false, false],
+  );
+  // The preview's dot is 0.43 of its text size across, which is 0.037 of the
+  // height, and centred 0.301 of that size right and 0.557 down from x and y.
+  const dot = all(20),
+    size = 720 * 0.037,
+    wide = dot.right - dot.left + 1,
+    high = dot.bottom - dot.top + 1;
+  assert.ok(Math.abs(wide - size * 0.43) <= 2, `${wide} pixels wide`);
+  assert.ok(Math.abs(high - size * 0.43) <= 2, `${high} pixels high`);
+  assert.ok(
+    Math.abs((dot.left + dot.right + 1) / 2 - (384 + size * 0.301)) <= 1.5,
+    `from ${dot.left} to ${dot.right}`,
+  );
+  assert.ok(
+    Math.abs((dot.top + dot.bottom + 1) / 2 - (288 + size * 0.557)) <= 1.5,
+    `from ${dot.top} to ${dot.bottom}`,
+  );
+  // Filled: a disc covers 0.79 of the square around it, the outline of a box far
+  // less, and its middle is lit.
+  assert.ok(dot.count / (wide * high) > 0.6, `${dot.count} pixels lit`);
+  const middle =
+    Math.round((dot.top + dot.bottom) / 2) * 1280 +
+    Math.round((dot.left + dot.right) / 2);
+  assert.ok(dot.grey[middle] > 200, `the middle is ${dot.grey[middle]}`);
+});
+
+test("text in an overlay is drawn as typed, where and when it was placed", async (t) => {
+  const h = await harness(t);
+  // To libass the whole of it is one event, and to FFmpeg, which reads the script.
+  const ass = buildTextASS({
+    width: 1280,
+    height: 720,
+    overlays: [label(HOSTILE, 1, 2)],
+  });
+  const events = (script) =>
+    script.split(/\r\n?|\n/).filter((line) => /^\s*Dialogue:/.test(line));
+  assert.equal(events(ass).length, 1, ass);
+  // After the codes that place it, every brace is escaped, and the only codes are
+  // the two line breaks that were typed.
+  const typed = events(ass)[0].replace(/^[^{]*\{[^}]*\}/, "");
+  assert.doesNotMatch(typed, /(?<!\\)[{}]/);
+  assert.deepEqual(typed.match(/\\[^{}\u200b]/g), ["\\N", "\\N"]);
+  const script = path.join(h.dir, "hostile.ass");
+  writeFileSync(script, ass);
+  const read = spawnSync(
+    ffmpeg,
+    ["-hide_banner", "-loglevel", "error", "-i", script, "-f", "ass", "pipe:1"],
+    { encoding: "utf8" },
+  );
+  assert.equal(read.status, 0, read.stderr);
+  assert.equal(events(read.stdout).length, 1, read.stdout);
+  // Nothing to draw: no script, and so no filter for it.
+  assert.equal(
+    buildTextASS({ width: 1280, height: 720, overlays: [label("", 1, 2)] }),
+    null,
+  );
+
+  const id = await h.record(
+    {
+      screen: colours(path.join(h.dir, "s.webm"), [["black", 3]]),
+      microphone: sound(
+        path.join(h.dir, "m.webm"),
+        "sine=frequency=440:sample_rate=48000:duration=3",
+      ),
+    },
+    3,
+  );
+  const project = await h.project(id);
+  Object.assign(project.layout, { width: 1280, height: 720 });
+  project.layout.audio.normalize = false;
+  project.overlays = [
+    label(HOSTILE, 1, 1.5),
+    label("HHH", 2, 2.5, { x: 0.25, y: 0.5 }),
+  ];
+  const done = await h.render(id, project);
+  assert.equal(done.status, "complete", done.error);
+  const { width, height } = project.layout,
+    file = h.file(id),
+    all = (frame) => ink(file, frame, [0, 0, width, height]),
+    size = Math.round(height * 0.045);
+  // Three lines of ordinary size starting at the overlay's corner, and nothing
+  // anywhere else: no giant "BIG", and no "INJECTED" in the corner.
+  const typedOut = all(37);
+  assert.ok(typedOut.count > 1000, `${typedOut.count} bright pixels`);
+  assert.ok(typedOut.left >= width * 0.1, `left ${typedOut.left}`);
+  assert.ok(typedOut.top >= height * 0.2 - 5, `top ${typedOut.top}`);
+  assert.ok(
+    typedOut.bottom <= height * 0.2 + size * 4.2,
+    `bottom ${typedOut.bottom}`,
+  );
+  assert.ok(typedOut.bottom >= height * 0.2 + size * 3, "three lines");
+  // On from its first second to its last, and the picture is clear otherwise.
+  assert.deepEqual(
+    [0, 29, 30, 45, 46, 59, 60, 75, 76, 89].map(
+      (frame) => all(frame).count > 0,
+    ),
+    [false, false, true, true, false, false, true, true, false, false],
+  );
+  // The capitals stand with their top left corner at the overlay's x and y, and
+  // are 0.7 of the text's size high.
+  const capitals = all(66);
+  assert.ok(Math.abs(capitals.top - height * 0.5) <= 2, `top ${capitals.top}`);
+  assert.ok(
+    capitals.left >= width * 0.25 && capitals.left <= width * 0.25 + 4,
+    `left ${capitals.left}`,
+  );
+  const tall = capitals.bottom - capitals.top + 1;
+  assert.ok(Math.abs(tall - size * 0.7) <= 2, `${tall} pixels high`);
 });

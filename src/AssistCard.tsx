@@ -49,9 +49,14 @@ export function AssistCard({
     [suggestion, setSuggestion] = useState<Suggestion | null>(null),
     [used, setUsed] = useState<Record<string, boolean>>({});
   useEffect(() => {
-    void api<AIState>("/api/ai/settings")
-      .then((s) => setAi(s.settings))
-      .catch(() => {});
+    const load = () =>
+      void api<AIState>("/api/ai/settings")
+        .then((s) => setAi(s.settings))
+        .catch(() => {});
+    load();
+    // Connecting or disconnecting a provider in Settings shows here straight away.
+    addEventListener("relay:ai-changed", load);
+    return () => removeEventListener("relay:ai-changed", load);
   }, []);
   if (!ai) return null;
   const mark = (key: string) => setUsed((u) => ({ ...u, [key]: true }));

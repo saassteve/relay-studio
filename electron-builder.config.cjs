@@ -24,6 +24,9 @@ module.exports = {
     "!**/*.map",
     "!node_modules/ffmpeg-static/ffmpeg.exe",
   ],
+  // The Mac is the only target. Elsewhere there is no video engine to download
+  // (desktop/ffmpeg-pins.cjs) and the native add-ons are left out above, so a build
+  // would not work.
   mac: {
     category: "public.app-category.productivity",
     icon: "desktop/icon.icns",
@@ -69,9 +72,6 @@ module.exports = {
       { x: 440, y: 200, type: "link", path: "/Applications" },
     ],
   },
-  win: { target: ["nsis"] },
-  nsis: { oneClick: false, allowToChangeInstallationDirectory: true },
-  linux: { target: ["AppImage"], category: "AudioVideo" },
   // Official builds check GitHub for new releases (desktop/studio.cjs). A feed is
   // only written into copies built with RELAY_UPDATE_URL, which update from it.
   publish: process.env.RELAY_UPDATE_URL
@@ -102,5 +102,25 @@ module.exports = {
       throw new Error(
         "Packages must not bundle an FFmpeg binary; Relay downloads it on first launch.",
       );
+    // Native libraries are loaded by process.arch, so the ones built for the other
+    // Mac chip are dead weight (about 100 MB in the Intel app). Each pattern names
+    // a folder that holds one architecture's binaries and nothing else.
+    const other = { x64: "arm64", arm64: "x64" }[
+      require("electron-builder").Arch[context.arch]
+    ];
+    if (context.electronPlatformName === "darwin" && other) {
+      const modules = path.join(base, "node_modules");
+      const foreign = fs.globSync(
+        [
+          `@img/sharp-darwin-${other}`,
+          `@img/sharp-libvips-darwin-${other}`,
+          `onnxruntime-node/bin/napi-v*/darwin/${other}`,
+          `{*,@*/*}/prebuilds/darwin-${other}`,
+        ],
+        { cwd: modules },
+      );
+      for (const dir of foreign)
+        fs.rmSync(path.join(modules, dir), { recursive: true, force: true });
+    }
   },
 };

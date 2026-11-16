@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Cloud, Copy, Link2Off, PlugZap } from "lucide-react";
 import { confirmDialog } from "./Modal";
-import { CLOUD_URL, external, SELF_HOST_URL } from "./links";
+import { external, SELF_HOST_URL } from "./links";
 import { api } from "./types";
 import { isLocal as local } from "./local";
 
@@ -128,12 +128,8 @@ function Connect({ notify }: { notify: (s: string) => void }) {
           No server yet?{" "}
           <a href={SELF_HOST_URL} {...external}>
             Host Relay yourself
-          </a>{" "}
-          for free, or have it run for you with{" "}
-          <a href={CLOUD_URL} {...external}>
-            Relay Cloud
           </a>
-          .
+          . It is free and takes about ten minutes.
         </p>
       )}
     </>

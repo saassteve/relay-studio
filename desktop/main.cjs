@@ -27,7 +27,10 @@ let mainWindow,
   captureUI,
   tray,
   hiddenForRecording = false,
-  quitting = false;
+  quitting = false,
+  // The recording may end without asking: Relay is relaunching, or the user has
+  // already agreed to it for the quit under way.
+  leaving = false;
 const STABLE_PORT = process.env.RELAY_PORT || "41730";
 const RECORDING_SHORTCUTS = {
   "Alt+Shift+P": "pause",
@@ -135,6 +138,26 @@ const isBubble = (webContents) => {
     return false;
   }
 };
+// Asked before a close, reload or quit ends the take. It blocks until answered:
+// the events that lead here need the answer before they return.
+function confirmEndRecording() {
+  const options = {
+    type: "warning",
+    message: "A recording is in progress",
+    detail:
+      "Closing now ends the recording. What has been captured so far is kept and can be recovered.",
+    buttons: ["Keep recording", "Close anyway"],
+    defaultId: 0,
+    cancelId: 0,
+  };
+  app.focus({ steal: true });
+  // The studio is hidden during a screen recording; a sheet attached to it
+  // could not be seen or answered.
+  const choice = mainWindow?.isVisible()
+    ? dialog.showMessageBoxSync(mainWindow, options)
+    : dialog.showMessageBoxSync(options);
+  return choice === 1;
+}
 function showStudio() {
   if (quitting) return;
   if (!mainWindow) return void createWindow();
@@ -199,6 +222,14 @@ async function createWindow() {
     reset();
   });
   win.webContents.on("render-process-gone", reset);
+  // While recording, the studio objects to being unloaded (the beforeunload handler
+  // in src/Recorder.tsx). Unhandled, Electron would silently refuse to close the
+  // window. preventDefault() here overrules the page and lets the unload go ahead.
+  win.webContents.on("will-prevent-unload", (event) => {
+    if (leaving || confirmEndRecording()) event.preventDefault();
+    // Keeping the recording also calls off a quit that was closing this window.
+    else quitting = false;
+  });
   win.webContents.on("did-start-navigation", (e, url, inPlace, isMainFrame) => {
     if (isMainFrame && !inPlace) reset();
   });
@@ -459,7 +490,7 @@ app
       return true;
     });
     const relaunch = () => {
-      quitting = true;
+      quitting = leaving = true;
       globalShortcut.unregisterAll();
       server?.kill();
       app.relaunch();
@@ -631,8 +662,18 @@ app.on("activate", () => {
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
+  // Ask before anything is torn down: quitting closes the recording surfaces
+  // (camera bubble, controls) before the studio gets to object.
+  if (nativeStudio?.state().active && !leaving) {
+    if (!confirmEndRecording()) return event.preventDefault();
+    leaving = true;
+  }
   quitting = true;
+});
+// The studio can still call a quit off after before-quit (see will-prevent-unload),
+// so the library server and shortcuts stay until the quit is certain.
+app.on("will-quit", () => {
   globalShortcut.unregisterAll();
   server?.kill();
 });

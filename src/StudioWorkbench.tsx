@@ -267,6 +267,17 @@ export const StudioWorkbench = forwardRef<
       JSON.stringify(state.published) !== JSON.stringify(project),
     );
   useEffect(() => onPending?.(pending), [pending, onPending]);
+  // How long each piece of added footage really is. A video's listed length is its
+  // published length, which can be shorter than the footage behind it.
+  const [footage, setFootage] = useState<Record<string, number>>({});
+  useEffect(() => {
+    for (const id of new Set(project?.segments.map((s) => s.sourceId)))
+      if (id !== clip.id && footage[id] === undefined)
+        void api<ProjectState>(`/api/videos/${id}/project`)
+          .then((s) => setFootage((f) => ({ ...f, [id]: s.sourceDuration })))
+          .catch(() => setFootage((f) => ({ ...f, [id]: 0 })));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project?.segments, clip.id]);
   // If the footage a transcript belongs to is removed, go back to the main one.
   useEffect(() => {
     if (
@@ -310,6 +321,9 @@ export const StudioWorkbench = forwardRef<
           onRendered(next);
           setOutline(next.outline || {});
           await transcript();
+        } else if (complete.type !== "render") {
+          // Work on footage added from another video, such as its transcript.
+          await transcript();
         } else {
           notify("Edited copy saved to your library");
           dispatchEvent(new CustomEvent("relay:library"));
@@ -346,6 +360,7 @@ export const StudioWorkbench = forwardRef<
     if (!addId) return;
     const s = await api<ProjectState>(`/api/videos/${addId}/project`);
     edit((p) => {
+      setFootage((f) => ({ ...f, [addId]: s.sourceDuration }));
       const section = { sourceId: addId, start: 0, end: s.sourceDuration };
       if (replace) p.segments[selected] = section;
       else p.segments.push(section);
@@ -484,7 +499,9 @@ export const StudioWorkbench = forwardRef<
     selectedSection.end,
     selectedSection.sourceId === clip.id
       ? state.sourceDuration
-      : videos.find((v) => v.id === selectedSection.sourceId)?.duration || 0,
+      : (footage[selectedSection.sourceId] ??
+          videos.find((v) => v.id === selectedSection.sourceId)?.duration ??
+          0),
   );
   // Which section the playhead is in, and where that is in the original footage.
   const playhead = () => {
@@ -1244,7 +1261,9 @@ export const StudioWorkbench = forwardRef<
                     "Creating the transcript",
                     `/api/videos/${sourceId}/transcribe`,
                     { model },
-                  ).then(() => transcript())
+                  ).then(() =>
+                    transcript().catch((e) => setError((e as Error).message)),
+                  )
                 }
               >
                 <Sparkles size={15} />
@@ -1474,7 +1493,9 @@ export const StudioWorkbench = forwardRef<
                       "Creating the transcript",
                       `/api/videos/${sourceId}/transcribe`,
                       { model },
-                    ).then(() => transcript())
+                    ).then(() =>
+                      transcript().catch((e) => setError((e as Error).message)),
+                    )
                   }
                 >
                   Create the transcript again

@@ -321,11 +321,17 @@
   outline: 1px dashed #ffffffcc;
   outline-offset: 3px;
 }
+/* Text as the export draws it (textEvents in server/studio/titles.mjs): bold, on
+   lines 1.322 em high, with the top left of the letters, not of the box, at the
+   effect's x and y. The box reaches 0.3125 em past the text at each side and
+   0.14 em past the line above and below, and tall letters start 0.282 em into
+   the line: the margins pull the box back by that much. */
 .draft-fx.text {
-  padding: calc(var(--h) * 0.009) calc(var(--h) * 0.012);
+  margin: -0.422em 0 0 -0.3125em;
+  padding: 0.14em 0.3125em;
   background: #0000008c;
   font:
-    500 calc(var(--h) * 0.045) / 1.2 "DM Sans",
+    700 calc(var(--h) * 0.045) / 1.322 "DM Sans",
     sans-serif;
   white-space: pre;
 }

@@ -18,7 +18,7 @@ import { zoomFilter } from "./autozoom.mjs";
 import { createArtwork, planLayout } from "./compose.mjs";
 import { outputWords } from "./project.mjs";
 import { parseJSON, problem } from "./schema.mjs";
-import { buildASS, TITLE_TYPES } from "./titles.mjs";
+import { buildASS, buildTextASS, TITLE_TYPES } from "./titles.mjs";
 
 const run = promisify(execFile);
 // Every render is 30 frames a second with 48 kHz sound: 1600 samples a frame.
@@ -564,9 +564,36 @@ export function createRenderer({ db, dataDir, find }) {
         fontsDir,
         "rP2tp2ywxg089UriI5-g4vlH9VoD8CmcqZG40F9JadbnoEwARZthTg.ttf",
       );
+      // Text, cursors, titles and captions are drawn by libass from styled subtitle
+      // files, so that characters the bundled fonts lack fall back to a system font.
+      const subtitles = (ass) => {
+        if (!ass) return;
+        const file = path.join(temp, `titles-${counter}.ass`),
+          target = next();
+        writeFileSync(file, ass);
+        vf.push(
+          `[${previous}]subtitles=filename='${filterPath(file)}':fontsdir='${filterPath(fontsDir)}'[${target}]`,
+        );
+        previous = target;
+      };
+      // Text and cursors waiting to be drawn: all at once, unless something that
+      // comes later is on screen with them and has to be drawn over them.
+      let texts = [];
+      const drawTexts = () => {
+        subtitles(
+          buildTextASS({ width: W, height: H, overlays: texts, fps: FPS }),
+        );
+        texts = [];
+      };
       for (const effect of effects) {
         if (effect.type === "zoom" || TITLE_TYPES.includes(effect.type))
           continue;
+        if (effect.type === "text" || effect.type === "cursor") {
+          texts.push(effect);
+          continue;
+        }
+        if (texts.some((t) => t.start <= effect.end && effect.start <= t.end))
+          drawTexts();
         const target = next(),
           x = Math.round(effect.x * W),
           y = Math.round(effect.y * H),
@@ -584,38 +611,26 @@ export function createRenderer({ db, dataDir, find }) {
             `[${previous}]drawbox=x=${x}:y=${y}:w=${w}:h=${h}:color=${effect.color.replace("#", "0x")}@0.8:t=4:enable='${enable}'[${target}]`,
           );
         else {
+          // An arrow: a single character, which the bundled font has.
           const text = path.join(temp, `text-${counter}.txt`);
-          writeFileSync(
-            text,
-            effect.type === "arrow"
-              ? "→"
-              : effect.type === "cursor"
-                ? "●"
-                : effect.text,
-          );
+          writeFileSync(text, "→");
           vf.push(
-            `[${previous}]drawtext=fontfile='${filterPath(font)}':textfile='${filterPath(text)}':expansion=none:fontsize=${effect.type === "arrow" ? Math.round(H * 0.12) : effect.type === "cursor" ? 40 : Math.max(18, Math.round(H * 0.045))}:fontcolor=${effect.color.replace("#", "0x")}:x=${x}:y=${y}:box=${effect.type === "text" ? 1 : 0}:boxcolor=black@0.55:boxborderw=10:enable='${enable}'[${target}]`,
+            `[${previous}]drawtext=fontfile='${filterPath(font)}':textfile='${filterPath(text)}':expansion=none:fontsize=${Math.round(H * 0.12)}:fontcolor=${effect.color.replace("#", "0x")}:x=${x}:y=${y}:enable='${enable}'[${target}]`,
           );
         }
         previous = target;
       }
-      // Captions and titles are drawn together from one styled subtitle file.
-      const ass = buildASS({
-        width: W,
-        height: H,
-        words: l.captions ? outputWords(project, find) : [],
-        captionStyle: l.captions ? l.captionStyle || "clean" : null,
-        overlays: effects,
-      });
-      if (ass) {
-        const file = path.join(temp, "titles.ass");
-        writeFileSync(file, ass);
-        const target = next();
-        vf.push(
-          `[${previous}]subtitles=filename='${filterPath(file)}':fontsdir='${filterPath(fontsDir)}'[${target}]`,
-        );
-        previous = target;
-      }
+      drawTexts();
+      // Captions and titles are drawn together, over everything else.
+      subtitles(
+        buildASS({
+          width: W,
+          height: H,
+          words: l.captions ? outputWords(project, find) : [],
+          captionStyle: l.captions ? l.captionStyle || "clean" : null,
+          overlays: effects,
+        }),
+      );
       progress(75);
       await exec([
         "-i",

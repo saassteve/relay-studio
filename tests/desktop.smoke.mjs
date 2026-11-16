@@ -2,9 +2,26 @@ import { _electron as electron } from "@playwright/test";
 import assert from "node:assert/strict";
 import path from "node:path";
 import os from "node:os";
+import net from "node:net";
 import { mkdtempSync, rmSync, realpathSync } from "node:fs";
 const data = mkdtempSync(path.join(os.tmpdir(), "relay-desktop-test-"));
-const env = { ...process.env, ELECTRON_ENABLE_LOGGING: "1" };
+// An installed Relay that is open holds the usual port, so the test takes 41730
+// only when it is free, and any other free port otherwise.
+const freePort = (preferred) =>
+  new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.once("error", (error) =>
+      preferred && error.code === "EADDRINUSE"
+        ? resolve(freePort(0))
+        : reject(error),
+    );
+    probe.listen(preferred, "127.0.0.1", () => {
+      const { port } = probe.address();
+      probe.close(() => resolve(String(port)));
+    });
+  });
+const port = await freePort(41730);
+const env = { ...process.env, ELECTRON_ENABLE_LOGGING: "1", RELAY_PORT: port };
 delete env.ELECTRON_RUN_AS_NODE;
 const app = await electron.launch({
   ...(process.env.RELAY_TEST_APP
@@ -42,7 +59,7 @@ try {
   await window.waitForFunction(() => document.title.endsWith("· Relay"));
   const info = await window.evaluate(() => window.relayDesktop.info());
   assert.equal(info.stablePort, true, "Library should use its stable port");
-  assert.equal(new URL(window.url()).port, "41730");
+  assert.equal(new URL(window.url()).port, port);
 
   // First run: guided setup, resumable after a reload or relaunch.
   const setup = window.getByRole("dialog", { name: "Set up Relay" });
@@ -224,6 +241,13 @@ try {
     "Desktop smoke passed: stable library port, resumable onboarding, permission checklist, native countdown, hide/restore, recording shortcuts, floating controls, teleprompter and update/permission APIs.",
   );
 } finally {
+  // A failure part-way can leave a recording marked active. Relay would then ask
+  // before quitting, with nobody there to answer: choose "Close anyway" for it.
+  await app
+    .evaluate(({ dialog }) => {
+      dialog.showMessageBoxSync = () => 1;
+    })
+    .catch(() => {});
   await app.close();
   rmSync(data, { recursive: true, force: true });
 }
