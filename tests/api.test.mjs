@@ -104,6 +104,22 @@ test("recording lifecycle: durable upload, byte ranges, real trim, sharing, feed
   const pub = await (await request(`/api/share/${shared.token}`)).json();
   assert.equal(pub.title, video.title);
   assert.equal(pub.token, undefined);
+  // The "Made with Relay" line is on by default and the owner can turn it off.
+  assert.equal(pub.credit, true);
+  await request("/api/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sharing: { publicLinks: true, credit: false } }),
+  });
+  assert.equal(
+    (await (await request(`/api/share/${shared.token}`)).json()).credit,
+    false,
+  );
+  await request("/api/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sharing: { publicLinks: true } }),
+  });
   assert.equal(pub.folder, undefined);
   const posted = await request(`/api/share/${shared.token}/comments`, {
     method: "POST",

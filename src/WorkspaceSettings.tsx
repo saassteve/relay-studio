@@ -60,7 +60,7 @@ export function WorkspaceSettings({
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [settings, setSettings] = useState<{
-      sharing: { publicLinks: boolean };
+      sharing: { publicLinks: boolean; credit?: boolean };
     } | null>(null),
     [integration, setIntegration] = useState<{
       token: string;
@@ -263,10 +263,30 @@ export function WorkspaceSettings({
               type="checkbox"
               checked={settings?.sharing.publicLinks !== false}
               onChange={(e) =>
-                setSettings({ sharing: { publicLinks: e.target.checked } })
+                setSettings({
+                  sharing: {
+                    ...settings?.sharing,
+                    publicLinks: e.target.checked,
+                  },
+                })
               }
             />
             Editors may create public share links
+          </label>
+          <label className="check-label">
+            <input
+              type="checkbox"
+              checked={settings?.sharing.credit !== false}
+              onChange={(e) =>
+                setSettings({
+                  sharing: {
+                    publicLinks: settings?.sharing.publicLinks !== false,
+                    credit: e.target.checked,
+                  },
+                })
+              }
+            />
+            Show “Made with Relay” on shared pages
           </label>
           <button
             className="btn small"

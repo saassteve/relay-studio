@@ -2651,3 +2651,25 @@ main[tabindex="-1"]:focus-visible {
   padding: 4px 22px 4px 8px !important;
   background-position: right 6px center !important;
 }
+
+/* Who made it, on the page viewers see */
+.review-footer a {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: inherit;
+  text-decoration: none;
+  border-radius: 6px;
+}
+.review-footer a:hover span,
+.review-footer a.maker:hover {
+  text-decoration: underline;
+}
+.review-footer a.maker {
+  color: var(--muted, #5c685f);
+  font-weight: 600;
+}
+.dialog-footer .small a {
+  color: inherit;
+  font-weight: 600;
+}

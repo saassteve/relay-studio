@@ -69,6 +69,12 @@ export function registerSharing({
     }
     return c;
   };
+  // Workspace-wide sharing choices made by the owner.
+  const policy = () =>
+    parseJSON(
+      db.prepare("SELECT value FROM settings WHERE key='sharing'").get()?.value,
+      {},
+    );
   const shareData = (v) => {
     const result = serialize(v, true),
       c = config(v);
@@ -76,6 +82,8 @@ export function registerSharing({
     return {
       ...result,
       downloadAllowed: c.download !== false,
+      // The "Made with Relay" line, which the owner can turn off.
+      credit: policy().credit !== false,
       // Who shared it, so viewers see a name rather than a placeholder.
       author: (() => {
         const name = db
@@ -107,11 +115,7 @@ export function registerSharing({
       );
   app.post("/api/videos/:id/share", owner, (req, res) => {
     const v = find(req.params.id);
-    const settings = parseJSON(
-      db.prepare("SELECT value FROM settings WHERE key='sharing'").get()?.value,
-      {},
-    );
-    if (settings.publicLinks === false && req.user?.role !== "owner")
+    if (policy().publicLinks === false && req.user?.role !== "owner")
       throw problem(403, "Public sharing is disabled by your workspace owner.");
     if (!v.token)
       db.prepare("UPDATE videos SET token=? WHERE id=?").run(
@@ -474,7 +478,7 @@ export function registerSharing({
       sharing: parseJSON(
         db.prepare("SELECT value FROM settings WHERE key='sharing'").get()
           ?.value,
-        { publicLinks: true },
+        { publicLinks: true, credit: true },
       ),
       ai: { local: true, ollamaConfigured: Boolean(process.env.OLLAMA_URL) },
       member: req.user
@@ -491,7 +495,10 @@ export function registerSharing({
     db.prepare(
       "INSERT INTO settings VALUES('sharing',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
     ).run(
-      JSON.stringify({ publicLinks: req.body.sharing?.publicLinks !== false }),
+      JSON.stringify({
+        publicLinks: req.body.sharing?.publicLinks !== false,
+        credit: req.body.sharing?.credit !== false,
+      }),
     );
     res.json({ ok: true });
   });

@@ -32,6 +32,7 @@ const RECORDING_SHORTCUTS = {
   "Alt+Shift+D": "draw",
 };
 app.setName("Relay");
+app.setAboutPanelOptions({ credits: "Built by brep · brep.ai" });
 if (!app.requestSingleInstanceLock()) app.exit(0);
 const localSecret = require("node:crypto").randomBytes(32).toString("hex");
 app.on("second-instance", () => {

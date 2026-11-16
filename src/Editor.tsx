@@ -26,6 +26,7 @@ import { StudioWorkbench, type WorkbenchHandle } from "./StudioWorkbench";
 import { WatchPlayer } from "./WatchPlayer";
 import { Menu, Modal, confirmDialog, tab as tabAttrs, tabPanel } from "./Modal";
 import { Logo } from "./Logo";
+import { external, MAKER_URL, REPO_URL } from "./links";
 // Groups transcript words into short phrases a viewer can read and jump to.
 function phrases(words: { text: string; start: number }[]) {
   const out: { start: number; text: string }[] = [];
@@ -762,10 +763,15 @@ export function Editor({
               )}{" "}
             </div>
           )}
-          {token && (
+          {token && clip.credit !== false && (
             <div className="review-footer">
-              <span>Made with</span>
-              <Logo small />
+              <a href={REPO_URL} {...external} aria-label="Made with Relay">
+                <span>Made with</span>
+                <Logo small />
+              </a>
+              <a className="maker" href={MAKER_URL} {...external}>
+                by brep
+              </a>
             </div>
           )}
         </aside>

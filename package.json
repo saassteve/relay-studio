@@ -61,5 +61,6 @@
     }
   },
   "description": "Local-first screen recording, reversible editing and video review.",
-  "author": "Relay contributors"
+  "author": "brep (https://brep.ai)",
+  "homepage": "https://github.com/saassteve/relay-studio"
 }

@@ -22,6 +22,10 @@
 </p>
 
 <p align="center">
+  Built by <a href="https://brep.ai/?ref=relay-github">brep</a>
+</p>
+
+<p align="center">
   <a href="#install-in-a-minute">Install</a> ·
   <a href="#take-the-tour">Tour</a> ·
   <a href="#how-relay-compares">Compare</a> ·
@@ -265,6 +269,10 @@ npm run desktop:dist # build the DMGs into release/
 Tests: `npm test` (API and rendering), `npm run test:e2e` (Chrome), `npm run test:desktop` (Electron). Self-hosting, settings and integrations are in [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md).
 
 Every image on this page is made by `node scripts/screenshots.mjs`, which builds demo recordings and renders them with Relay itself. The presenter is an AI-generated stand-in, not a real person.
+
+## Who makes Relay
+
+Relay is built and maintained by [brep](https://brep.ai/?ref=relay-github), an AI consulting and engineering practice for small and mid-sized businesses. If you want software or AI agents built to this standard inside your own business, [talk to us](https://brep.ai/?ref=relay-github).
 
 ## Contributing
 

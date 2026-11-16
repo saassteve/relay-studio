@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { api } from "./types";
 import "./ai-settings.css";
+import { external } from "./links";
 
 export interface AIProvider {
   id: string;
@@ -38,10 +39,6 @@ export interface AIState {
   providers: AIProvider[];
 }
 // External pages open in the browser; in the Mac app a plain link does that.
-const external = window.relayDesktop
-  ? {}
-  : { target: "_blank", rel: "noreferrer" };
-
 export function AISettings({ notify }: { notify: (s: string) => void }) {
   const [state, setState] = useState<AIState | null>(null),
     [provider, setProvider] = useState(""),

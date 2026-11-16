@@ -29,6 +29,8 @@ export interface Clip {
   shareConfig?: ShareConfig;
   downloadAllowed?: boolean;
   author?: string;
+  // Whether the share page shows "Made with Relay".
+  credit?: boolean;
   cta?: { label: string; url: string };
   comments: Comment[];
   reactions: { emoji: string; count: number }[];

@@ -43,6 +43,7 @@ import {
 } from "./prefs";
 import { createDemo, inspectVideo } from "./media";
 import { api, bytes, clock, type Clip } from "./types";
+import { external, MAKER_URL } from "./links";
 // The shortcut key people actually have on their keyboard.
 const mod = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl";
 export default function App() {
@@ -1315,7 +1316,12 @@ export default function App() {
                     : "To record your screen, use Chrome or Edge, or the Relay Mac app. Your browser asks which screen to share."}
                 </p>
                 <div className="dialog-footer">
-                  <span className="small muted">Relay {__RELAY_VERSION__}</span>
+                  <span className="small muted">
+                    Relay {__RELAY_VERSION__} · built by{" "}
+                    <a href={MAKER_URL} {...external}>
+                      brep
+                    </a>
+                  </span>
                   <button className="btn" onClick={() => void openOnboarding()}>
                     Replay the setup guide
                   </button>
