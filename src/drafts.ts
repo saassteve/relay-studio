@@ -12,6 +12,7 @@ export interface Draft {
     layout?: Project["layout"];
     excluded?: { start: number; end: number }[];
     pointers?: { time: number; x: number; y: number }[];
+    autoZoom?: boolean;
   };
   jobId?: string;
   videoId?: string;
@@ -141,9 +142,12 @@ export function syncDraft(id: string): Promise<void> {
           },
         );
         if (!response.ok) {
-          const b = await response.json();
+          const b = await response.json().catch(() => ({}));
           throw new Error(b.error || "A recording chunk could not be saved.");
         }
+        // Discarded while this chunk was uploading: don't write it back.
+        const current = await getDraft(id);
+        if (!current || current.status === "discarded") return;
         await store("parts", "readwrite", (s) =>
           s.put({ ...part, uploaded: true }),
         );
@@ -246,8 +250,14 @@ export async function waitForDraft(
 }
 export async function discardDraft(id: string) {
   const draft = await getDraft(id);
-  if (draft?.status === "processing")
-    throw new Error("Wait for this recording to finish processing.");
+  if (draft?.status === "processing" && !draft.error) {
+    // Still allow clearing out a recording whose processing has failed.
+    const job = draft.jobId
+      ? await api<Job>(`/api/jobs/${draft.jobId}`).catch(() => null)
+      : null;
+    if (job && job.status !== "failed")
+      throw new Error("Wait for this recording to finish processing.");
+  }
   await updateDraft(id, { status: "discarded" });
   for (const part of await parts(id))
     await store("parts", "readwrite", (s) => s.delete(part.key));

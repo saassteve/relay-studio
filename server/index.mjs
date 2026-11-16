@@ -1,6 +1,18 @@
 import express from "express";
 import path from "node:path";
 import { createApp } from "./app.mjs";
+import { execFileSync } from "node:child_process";
+// Stop any media engine or AI worker this server started.
+function stopChildren() {
+  try {
+    execFileSync("pkill", ["-TERM", "-P", String(process.pid)], {
+      stdio: "ignore",
+    });
+  } catch {
+    /* No children were running. */
+  }
+}
+
 const host = process.env.HOST || "127.0.0.1",
   port = Number(process.env.PORT || 5173);
 if (
@@ -37,6 +49,7 @@ const server = app.listen(port, host, () =>
   console.log(`Relay is ready at http://${host}:${port}`),
 );
 async function shutdown() {
+  stopChildren();
   server.close(async () => {
     await vite?.close();
     close();

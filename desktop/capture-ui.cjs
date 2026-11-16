@@ -9,8 +9,12 @@ const SIZES = { s: 150, m: 210, l: 300 };
 const SNAP = 48;
 const MARGIN = 24;
 
-module.exports = function attachCaptureUI({ captureBounds, region }) {
-  let bubble, countdown, overlay, drawing = false, bubbleSize = "m";
+module.exports = function attachCaptureUI({ captureBounds, region, baseURL }) {
+  let bubble,
+    countdown,
+    overlay,
+    drawing = false,
+    bubbleSize = "m";
   const secure = {
     preload: path.join(__dirname, "overlay-preload.cjs"),
     contextIsolation: true,
@@ -104,7 +108,7 @@ module.exports = function attachCaptureUI({ captureBounds, region }) {
       y = area.y + area.height - b.height - MARGIN;
     if (x !== b.x || y !== b.y) bubble.setPosition(x, y, true);
   }
-  function openBubble({ deviceId = "", size = "m" } = {}) {
+  function openBubble({ deviceId = "", size = "m", filter, background } = {}) {
     closeBubble();
     bubbleSize = SIZES[size] ? size : "m";
     bubble = new BrowserWindow({
@@ -130,11 +134,14 @@ module.exports = function attachCaptureUI({ captureBounds, region }) {
     bubble.on("moved", snapBubble);
     bubble.on("closed", () => (bubble = undefined));
     const win = bubble;
-    void bubble.loadFile(path.join(__dirname, "bubble.html")).then(() => {
+    // Served by Relay's own library server so it shares the recorder's look pipeline.
+    void bubble.loadURL(`${baseURL()}/bubble.html`).then(() => {
       if (win.isDestroyed()) return;
       win.webContents.send("relay:bubble-config", {
         deviceId: String(deviceId).slice(0, 300),
         size: bubbleSize,
+        filter: String(filter || "none").slice(0, 20),
+        background: String(background || "none").slice(0, 20),
       });
       win.showInactive();
     });
@@ -245,7 +252,7 @@ module.exports = function attachCaptureUI({ captureBounds, region }) {
         shape: "circle",
         size,
         x: clamp((b.x - fx) / fw, 0, 1 - size),
-        y: clamp((b.y - fy) / fh, 0, 1 - (b.height / fh)),
+        y: clamp((b.y - fy) / fh, 0, 1 - b.height / fh),
       };
     },
     dispose() {

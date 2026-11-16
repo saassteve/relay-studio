@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import ffmpeg from "../ffmpeg.mjs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -12,10 +13,18 @@ export function createTranscription({ db, dataDir, find, renderer }) {
     "Xenova/whisper-tiny",
     "Xenova/whisper-base.en",
   ];
+  // The bundled ONNX runtime has no Intel Mac build.
+  const supported = !(process.platform === "darwin" && process.arch === "x64");
+  const unsupported = () =>
+    problem(
+      501,
+      "On-device transcription needs an Apple Silicon Mac. You can import captions (SRT or VTT) instead.",
+    );
   const modelReady = (model) =>
     existsSync(path.join(dataDir, "models", model, "config.json")) &&
     existsSync(path.join(dataDir, "models", model, "onnx"));
   async function prepare({ model = "Xenova/whisper-tiny.en" }, progress) {
+    if (!supported) throw unsupported();
     if (!models.includes(model))
       throw problem(400, "Choose a supported local transcription model.");
     progress(5);
@@ -30,6 +39,7 @@ export function createTranscription({ db, dataDir, find, renderer }) {
   ) {
     if (!models.includes(model))
       throw problem(400, "Choose a supported local transcription model.");
+    if (!supported) throw unsupported();
     const v = find(videoId),
       assets = renderer.assetsFor(v),
       source =
@@ -91,7 +101,7 @@ export function createTranscription({ db, dataDir, find, renderer }) {
   async function worker(args, progress) {
     const child = execFile(
       process.execPath,
-      [path.resolve("server/studio/asr-worker.mjs"), ...args],
+      [fileURLToPath(new URL("./asr-worker.mjs", import.meta.url)), ...args],
       {
         env: {
           ...process.env,
@@ -142,6 +152,7 @@ export function createTranscription({ db, dataDir, find, renderer }) {
     const text = words.map((w) => w.text).join(" ");
     let summary;
     if (provider === "local") {
+      if (!supported) throw unsupported();
       const dir = mkdtempSync(path.join(dataDir, "tmp", "summary-"));
       try {
         const input = path.join(dir, "input.txt");
@@ -289,5 +300,13 @@ export function createTranscription({ db, dataDir, find, renderer }) {
       }));
     return [...silence.filter((s) => s.end - s.start > 0.1), ...filler];
   }
-  return { transcribe, summarize, suggestions, prepare, modelReady, models };
+  return {
+    transcribe,
+    summarize,
+    suggestions,
+    prepare,
+    modelReady,
+    models,
+    supported,
+  };
 }

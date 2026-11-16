@@ -1,0 +1,37 @@
+name: Bug report
+description: Something isn't working the way it should.
+labels: [bug]
+body:
+  - type: textarea
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Relay
+        2. Start a screen + camera recording
+        3. …
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: Where are you running Relay?
+      options:
+        - Mac app (Apple Silicon)
+        - Mac app (Intel)
+        - Web app, self-hosted
+        - Web app, from source
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Relay and macOS versions
+      placeholder: Relay 0.4.0 on macOS 15.2
+  - type: textarea
+    attributes:
+      label: Anything else?
+      description: Screenshots or logs help. Please don't attach private recordings.

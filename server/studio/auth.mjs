@@ -21,6 +21,7 @@ export function passwordMatches(value, stored) {
   }
 }
 export function createAuth({ app, db, password, rateLimit }) {
+  const decoy = passwordHash("relay-decoy-password");
   const publicMember = (m) =>
     m && { id: m.id, email: m.email, name: m.name, role: m.role };
   let root = db.prepare("SELECT * FROM members WHERE id='owner'").get();
@@ -65,26 +66,26 @@ export function createAuth({ app, db, password, rateLimit }) {
       !(
         (req.method === "POST" &&
           /^\/api\/notifications\/[^/]+\/read$/.test(req.path)) ||
-        (req.method === "PUT" && /^\/api\/(preferences|profile)$/.test(req.path))
+        (req.method === "PUT" &&
+          /^\/api\/(preferences|profile)$/.test(req.path))
       )
     )
       return res
         .status(403)
         .json({ error: "Your workspace role is view-only." });
     if (req.user.role === "viewer") {
+      const lower = req.path.toLowerCase();
       if (
-        /^\/api\/(jobs|recordings)(\/|$)/.test(req.path) ||
-        /^\/api\/videos\/[^/]+\/(project(?:[/.]|$)|tracks(?:\/|$)|transcript(?:\/|$)|focus-suggestions)/.test(
-          req.path,
+        /^\/api\/(jobs|recordings)(\/|$)/.test(lower) ||
+        /^\/api\/videos\/[^/]+\/(project(?:[/.]|$)|tracks(?:\/|$)|transcript(?:\/|$)|focus-suggestions|analytics)/.test(
+          lower,
         )
       )
-        return res
-          .status(403)
-          .json({
-            error:
-              "Source footage and editing projects are restricted to workspace editors.",
-          });
-      const id = req.path.match(
+        return res.status(403).json({
+          error:
+            "Source footage and editing projects are restricted to workspace editors.",
+        });
+      const id = lower.match(
         /^\/api\/(?:videos|media)\/([a-f0-9-]{36})(?:[/.]|$)/,
       )?.[1];
       const row =
@@ -140,10 +141,12 @@ export function createAuth({ app, db, password, rateLimit }) {
       .trim()
       .toLowerCase();
     const member = db.prepare("SELECT * FROM members WHERE email=?").get(email);
-    if (
-      !member ||
-      !passwordMatches(String(req.body.password || ""), member.password)
-    )
+    // Always run the hash so response time doesn't reveal which emails exist.
+    const matches = passwordMatches(
+      String(req.body.password || ""),
+      member?.password || decoy,
+    );
+    if (!member || !matches)
       throw problem(401, "That email and password don’t match.");
     login(res, member.id);
     res.json({ unlocked: true, member: publicMember(member) });
@@ -184,6 +187,12 @@ export function createAuth({ app, db, password, rateLimit }) {
     microphoneId: (v) => typeof v === "string" && v.length <= 300,
     cameraId: (v) => typeof v === "string" && v.length <= 300,
     systemAudio: (v) => typeof v === "boolean",
+    autoZoom: (v) => typeof v === "boolean",
+    cameraFilter: (v) =>
+      ["none", "vivid", "warm", "cool", "mono", "film", "soft"].includes(v),
+    cameraBackground: (v) =>
+      typeof v === "string" &&
+      /^(none|blur|pine|dusk|studio|sunrise|custom|#[0-9a-f]{6})$/i.test(v),
   };
   const readPreferences = (id) =>
     parseJSON(

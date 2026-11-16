@@ -2,6 +2,7 @@ import express from "express";
 import { migrateStudio, parseJSON } from "./studio/schema.mjs";
 import { createAuth } from "./studio/auth.mjs";
 import { registerStudio } from "./studio/index.mjs";
+import { mediaHeaders } from "./studio/schema.mjs";
 import { outputWords, publishedProject } from "./studio/project.mjs";
 import ffmpeg from "./ffmpeg.mjs";
 import { execFile } from "node:child_process";
@@ -33,6 +34,7 @@ const text = (v, max, fallback = "") =>
 export function createApp({
   dataDir = path.resolve("data"),
   password = process.env.ADMIN_PASSWORD || "",
+  localSecret = "",
 } = {}) {
   mkdirSync(path.join(dataDir, "media"), { recursive: true });
   mkdirSync(path.join(dataDir, "tmp"), { recursive: true });
@@ -51,7 +53,28 @@ export function createApp({
       count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(video_id,emoji));`);
   migrateStudio(db);
   const app = express();
+  // Route matching must agree with the role checks, which compare exact paths.
+  app.set("case sensitive routing", true);
+  if (process.env.TRUST_PROXY) app.set("trust proxy", process.env.TRUST_PROXY);
   app.disable("x-powered-by");
+  // The Mac app's library is private to Relay's own windows: other programs on the
+  // computer can reach the port but don't hold this per-launch secret. Shared
+  // watch pages stay open so links work in a browser.
+  if (localSecret)
+    app.use((req, res, next) => {
+      const p = req.path.toLowerCase();
+      if ((!p.startsWith("/api/") && p !== "/mcp") || p.startsWith("/api/share/"))
+        return next();
+      const given =
+        req.headers.cookie?.match(/(?:^|;\s*)relay_local=([a-f0-9]{64})(?:;|$)/)?.[1] ||
+        "";
+      if (p === "/mcp" && req.get("authorization")) return next();
+      if (given !== localSecret)
+        return res
+          .status(401)
+          .json({ error: "Open Relay to use this library." });
+      next();
+    });
   app.use((req, res, next) => {
     if (
       !password &&
@@ -83,6 +106,10 @@ export function createApp({
     next();
   });
   app.use(express.json({ limit: "2mb" }));
+  app.use((req, res, next) => {
+    req.body ??= {};
+    next();
+  });
   const attempts = new Map();
   const rateLimit = (req, res, next) => {
     const key = `${req.ip}:${req.path}`,
@@ -475,83 +502,14 @@ export function createApp({
     }
     res.json({ ok: true });
   });
-  app.post("/api/videos/:id/share", owner, (req, res) => {
+  app.get("/api/media/:id", owner, (req, res) => {
     const v = find(req.params.id);
-    if (!v.token)
-      db.prepare("UPDATE videos SET token=? WHERE id=?").run(
-        randomBytes(24).toString("base64url"),
-        v.id,
-      );
-    res.json(serialize(find(v.id)));
-  });
-  app.delete("/api/videos/:id/share", owner, (req, res) => {
-    find(req.params.id);
-    db.prepare("UPDATE videos SET token=NULL WHERE id=?").run(req.params.id);
-    res.json({ ok: true });
-  });
-  const media = (res, v, download) => {
-    res.set({ "Content-Type": v.mime, "Cache-Control": "private, no-store" });
-    if (download)
-      res.set(
-        "Content-Disposition",
-        `attachment; filename="relay-${v.id}.${v.mime === "video/webm" ? "webm" : "mp4"}"`,
+    mediaHeaders(res, v.mime);
+    if (req.query.download)
+      res.attachment(
+        `relay-${v.id}.${v.mime === "video/webm" ? "webm" : "mp4"}`,
       );
     res.sendFile(v.filename, { root: path.join(dataDir, "media") });
-  };
-  app.get("/api/media/:id", owner, (req, res) =>
-    media(res, find(req.params.id), req.query.download),
-  );
-  app.get("/api/share/:token", (req, res) =>
-    res.json(serialize(byToken(req.params.token), true)),
-  );
-  app.post("/api/share/:token/view", rateLimit, (req, res) => {
-    const v = byToken(req.params.token);
-    db.prepare("UPDATE videos SET views=views+1 WHERE id=?").run(v.id);
-    res.json({ ok: true });
-  });
-  app.get("/api/share/:token/media", (req, res) =>
-    media(res, byToken(req.params.token), req.query.download),
-  );
-  const comment = (v, b) => {
-    const author = text(b.author, 60),
-      body = text(b.body, 2000),
-      time = Number(b.time);
-    if (
-      !author ||
-      !body ||
-      !Number.isFinite(time) ||
-      time < 0 ||
-      time > v.duration
-    )
-      throw fail(400, "Add your name, a comment, and a valid timestamp.");
-    db.prepare("INSERT INTO comments VALUES(?,?,?,?,?,?)").run(
-      randomUUID(),
-      v.id,
-      author,
-      body,
-      time,
-      new Date().toISOString(),
-    );
-  };
-  app.post("/api/videos/:id/comments", owner, rateLimit, (req, res) => {
-    const v = find(req.params.id);
-    comment(v, req.body);
-    res.status(201).json(serialize(v));
-  });
-  app.post("/api/share/:token/comments", rateLimit, (req, res) => {
-    const v = byToken(req.params.token);
-    comment(v, req.body);
-    res.status(201).json(serialize(v, true));
-  });
-  app.post("/api/share/:token/reactions", rateLimit, (req, res) => {
-    const v = byToken(req.params.token),
-      emoji = req.body.emoji;
-    if (!["❤️", "👏", "💡", "🎉"].includes(emoji))
-      throw fail(400, "Choose a supported reaction.");
-    db.prepare(
-      "INSERT INTO reactions VALUES(?,?,1) ON CONFLICT(video_id,emoji) DO UPDATE SET count=count+1",
-    ).run(v.id, emoji);
-    res.json(serialize(find(v.id), true));
   });
   app.use("/api", (req, res) =>
     res.status(404).json({ error: "This endpoint could not be found." }),

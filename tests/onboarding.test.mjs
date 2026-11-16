@@ -57,12 +57,20 @@ test("onboarding state, profile name and local AI readiness persist with the lib
   for (const bad of [{ countdown: 7 }, { quality: 4000 }, { bubbleSize: "xl" }])
     assert.equal((await json("/api/preferences", "PUT", bad)).status, 400);
 
-  const profile = await json("/api/profile", "PUT", { name: "  Avery   Quinn " });
+  const profile = await json("/api/profile", "PUT", {
+    name: "  Avery   Quinn ",
+  });
   assert.equal((await profile.json()).member.name, "Avery Quinn");
-  assert.equal((await json("/api/profile", "PUT", { name: "   " })).status, 400);
+  assert.equal(
+    (await json("/api/profile", "PUT", { name: "   " })).status,
+    400,
+  );
 
   // Clearing a key with null, then a restart: setup resumes where it left off.
-  await json("/api/preferences", "PUT", { onboardingStep: null, onboarded: true });
+  await json("/api/preferences", "PUT", {
+    onboardingStep: null,
+    onboarded: true,
+  });
   await restart();
   const after = await (await json("/api/preferences")).json();
   assert.equal(after.onboarded, true);

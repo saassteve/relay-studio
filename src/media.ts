@@ -1,10 +1,18 @@
 import type { Mode } from "./types";
+import { ticker } from "./ticker";
+import {
+  createCameraPipeline,
+  isPlain,
+  type CameraLook,
+  type CameraPipeline,
+} from "./cameraEffects";
 export interface CaptureOptions {
   microphoneId?: string;
   cameraId?: string;
   systemAudio?: boolean;
   region?: { x: number; y: number; w: number; h: number };
   frameRate?: number;
+  look?: CameraLook;
 }
 export type CaptureSession = {
   stream: MediaStream;
@@ -31,13 +39,15 @@ export async function acquireCapture(
   const owned: MediaStream[] = [];
   let context: AudioContext | undefined;
   let frame = 0,
-    regionFrame: ReturnType<typeof setTimeout> | undefined;
+    stopRegion: () => void = () => {};
   let regionStream: MediaStream | undefined;
   let analyser: AnalyserNode | undefined;
   let canvasStream: MediaStream | undefined;
+  let look: CameraPipeline | undefined;
   const cleanup = () => {
+    look?.stop();
     cancelAnimationFrame(frame);
-    clearTimeout(regionFrame);
+    stopRegion();
     regionStream?.getTracks().forEach((t) => t.stop());
     owned.forEach((s) => s.getTracks().forEach((t) => t.stop()));
     canvasStream?.getTracks().forEach((t) => t.stop());
@@ -75,6 +85,13 @@ export async function acquireCapture(
         audio: false,
       });
       owned.push(camera);
+      // Filters and backgrounds are applied live, so the recorded camera track
+      // looks exactly like the preview.
+      if (options.look && !isPlain(options.look)) {
+        look = await createCameraPipeline(camera, options.look);
+        await look.ready;
+        camera = look.stream;
+      }
     }
     if (mic) {
       microphone = await navigator.mediaDevices.getUserMedia({
@@ -105,10 +122,8 @@ export async function acquireCapture(
       canvas.width = Math.min(quality, sw);
       canvas.height = Math.round((canvas.width * sh) / sw / 2) * 2;
       const ctx = canvas.getContext("2d")!;
-      // The cropped region is a recorded track, so it is drawn on a timer rather than
+      // The cropped region is a recorded track, so it is drawn on a steady timer rather than
       // animation frames, which stop while Relay's window is hidden during capture.
-      const interval = 1000 / (options.frameRate || 30);
-      let next = performance.now();
       const draw = () => {
         ctx.drawImage(
           source,
@@ -121,13 +136,9 @@ export async function acquireCapture(
           canvas.width,
           canvas.height,
         );
-        next += interval;
-        regionFrame = setTimeout(
-          draw,
-          Math.max(0, next - performance.now()),
-        );
       };
       draw();
+      stopRegion = ticker(draw, options.frameRate || 30);
       regionStream = canvas.captureStream(options.frameRate || 30);
       screen = new MediaStream([
         ...regionStream.getVideoTracks(),
@@ -146,7 +157,8 @@ export async function acquireCapture(
       const sv = await ready(screen),
         cv = await ready(camera);
       const canvas = document.createElement("canvas");
-      canvas.width = Math.min(quality, sv.videoWidth || quality);
+      // Preview only (tracks are recorded separately), so keep it light.
+      canvas.width = Math.min(960, sv.videoWidth || 960);
       canvas.height = Math.round(
         (canvas.width * (sv.videoHeight || 720)) / (sv.videoWidth || 1280),
       );

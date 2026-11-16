@@ -23,10 +23,12 @@ import {
 } from "lucide-react";
 import { api, type Job, type BubbleSize } from "./types";
 import { defaults, savePreferences, type Preferences } from "./prefs";
+import { CameraLookPicker } from "./CameraLook";
 import "./onboarding.css";
 
 type Step = "welcome" | "name" | "permissions" | "check" | "prefs" | "ready";
-type Permission = "granted" | "denied" | "restricted" | "not-determined" | "unknown";
+type Permission =
+  "granted" | "denied" | "restricted" | "not-determined" | "unknown";
 export type OnboardingExit = "record" | "sample" | "library";
 
 const isMac = () => window.relayDesktop?.platform === "darwin";
@@ -79,7 +81,10 @@ export function Onboarding({
     setPrefs((p) => ({ ...p, ...next }));
     void savePreferences(next);
   };
+  const leaving = useRef(false);
   const finish = async (exit: OnboardingExit) => {
+    if (leaving.current) return;
+    leaving.current = true;
     await savePreferences({ onboarded: true, onboardingStep: null });
     onDone(exit);
   };
@@ -134,7 +139,8 @@ export function Onboarding({
             onSubmit={async (e) => {
               e.preventDefault();
               const clean = name.trim();
-              if (!clean) return setError("Add a name so people know who’s talking.");
+              if (!clean)
+                return setError("Add a name so people know who’s talking.");
               try {
                 await api("/api/profile", {
                   method: "PUT",
@@ -214,10 +220,11 @@ export function Onboarding({
               <Check size={34} />
             </div>
             <h1>
-              You’re all set{name.trim() ? `, ${name.trim().split(" ")[0]}` : ""}.
+              You’re all set
+              {name.trim() ? `, ${name.trim().split(" ")[0]}` : ""}.
             </h1>
             <p className="lede">
-              Press <kbd>⌘</kbd>
+              Press <kbd>⌥</kbd>
               <kbd>⇧</kbd>
               <kbd>R</kbd> from anywhere to record.
               {window.relayDesktop &&
@@ -274,7 +281,13 @@ function Footer({
   );
 }
 
-function Welcome({ onNext, onSkip }: { onNext: () => void; onSkip: () => void }) {
+function Welcome({
+  onNext,
+  onSkip,
+}: {
+  onNext: () => void;
+  onSkip: () => void;
+}) {
   return (
     <div className="onboarding-panel welcome-panel">
       <span className="eyebrow">WELCOME TO RELAY</span>
@@ -385,7 +398,9 @@ function Permissions({
   ];
   const allGranted =
     status &&
-    rows.every((r) => status[r.kind] === "granted" || status[r.kind] === "unknown");
+    rows.every(
+      (r) => status[r.kind] === "granted" || status[r.kind] === "unknown",
+    );
   const screenPending =
     isMac() && status && status.screen !== "granted" && asked.screen;
   return (
@@ -430,7 +445,10 @@ function Permissions({
                   <Settings size={14} /> Open Settings
                 </button>
               ) : (
-                <button className="btn small primary" onClick={() => void request(kind)}>
+                <button
+                  className="btn small primary"
+                  onClick={() => void request(kind)}
+                >
                   Allow
                 </button>
               )}
@@ -473,10 +491,13 @@ function Permissions({
       )}
       <Footer
         onBack={onBack}
-        note={allGranted ? "Everything’s ready." : "You can change these later."}
+        note={
+          allGranted ? "Everything’s ready." : "You can change these later."
+        }
       >
         <button className="btn primary big" onClick={onNext}>
-          {allGranted ? "Continue" : "Continue for now"} <ArrowRight size={16} />
+          {allGranted ? "Continue" : "Continue for now"}{" "}
+          <ArrowRight size={16} />
         </button>
       </Footer>
     </div>
@@ -496,40 +517,22 @@ function DeviceCheck({
   onBack: () => void;
   onNext: () => void;
 }) {
-  const video = useRef<HTMLVideoElement>(null);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]),
     [level, setLevel] = useState(0),
     [heard, setHeard] = useState(false),
     [loud, setLoud] = useState(false),
-    [cameraError, setCameraError] = useState(""),
     [micError, setMicError] = useState("");
   const cameraId = prefs.cameraId || "",
     microphoneId = prefs.microphoneId || "";
   useEffect(() => {
-    let stream: MediaStream | undefined, cancelled = false;
-    setCameraError("");
-    navigator.mediaDevices
-      ?.getUserMedia({
-        video: cameraId ? { deviceId: { exact: cameraId } } : true,
-        audio: false,
-      })
-      .then(async (s) => {
-        if (cancelled) return s.getTracks().forEach((t) => t.stop());
-        stream = s;
-        if (video.current) video.current.srcObject = s;
-        setDevices(await navigator.mediaDevices.enumerateDevices());
-      })
-      .catch((e) =>
-        setCameraError(
-          e.name === "NotAllowedError"
-            ? "Camera access is off. You can still record your screen."
-            : "No camera found. Screen and voice still work.",
-        ),
-      );
-    return () => {
-      cancelled = true;
-      stream?.getTracks().forEach((t) => t.stop());
-    };
+    // Device names appear once a camera or mic has been allowed.
+    const refresh = () =>
+      void navigator.mediaDevices
+        ?.enumerateDevices()
+        .then(setDevices)
+        .catch(() => {});
+    const t = setTimeout(refresh, 1200);
+    return () => clearTimeout(t);
   }, [cameraId]);
   useEffect(() => {
     let stream: MediaStream | undefined,
@@ -588,19 +591,22 @@ function DeviceCheck({
       <span className="eyebrow">STEP {index + 1}</span>
       <h1>Looking good. Sounding good?</h1>
       <p className="lede">
-        Pick your camera and microphone, then say hello. Relay remembers your
-        choice for every recording.
+        Pick a camera look and a microphone, then say hello. Backgrounds and
+        filters run on your device and apply to every recording.
       </p>
       <div className="check-grid">
         <div className="check-camera">
-          <div className="bubble-preview">
-            <video ref={video} autoPlay muted playsInline />
-            {cameraError && (
-              <span className="bubble-empty">
-                <Camera size={26} />
-              </span>
-            )}
-          </div>
+          <CameraLookPicker
+            cameraId={cameraId}
+            look={{
+              filter: prefs.cameraFilter || "none",
+              background: prefs.cameraBackground || "none",
+            }}
+            onChange={(l) =>
+              update({ cameraFilter: l.filter, cameraBackground: l.background })
+            }
+            size={150}
+          />
           <label className="field small">
             Camera
             <select
@@ -618,7 +624,6 @@ function DeviceCheck({
                 ))}
             </select>
           </label>
-          {cameraError && <p className="check-note">{cameraError}</p>}
         </div>
         <div className="check-mic">
           <div
@@ -726,12 +731,19 @@ function PrefsStep({
     progress: 0,
   });
   useEffect(() => {
-    void api<{ models: { model: string; ready: boolean }[] }>("/api/ai/status")
+    void api<{
+      supported?: boolean;
+      models: { model: string; ready: boolean }[];
+    }>("/api/ai/status")
       .then((s) =>
         setAi({
-          status: s.models.find((m) => m.model === "Xenova/whisper-tiny.en")?.ready
-            ? "complete"
-            : "idle",
+          status:
+            s.supported === false
+              ? "unsupported"
+              : s.models.find((m) => m.model === "Xenova/whisper-tiny.en")
+                    ?.ready
+                ? "complete"
+                : "idle",
           progress: 0,
         }),
       )
@@ -744,7 +756,11 @@ function PrefsStep({
         "/api/ai/prepare",
         { method: "POST", body: JSON.stringify({}) },
       );
-      while (job.status !== "complete" && job.status !== "failed" && "id" in job) {
+      while (
+        job.status !== "complete" &&
+        job.status !== "failed" &&
+        "id" in job
+      ) {
         await new Promise((r) => setTimeout(r, 900));
         job = await api<Job>(`/api/jobs/${job.id}`);
         setAi({ status: "running", progress: job.progress });
@@ -817,7 +833,9 @@ function PrefsStep({
             <div className="pref-row">
               <span>
                 <strong>Camera bubble on screen</strong>
-                <small>Drag it anywhere. Where it sits is where it renders.</small>
+                <small>
+                  Drag it anywhere. Where it sits is where it renders.
+                </small>
               </span>
               <Choice<"off" | BubbleSize>
                 label="Camera bubble"
@@ -835,6 +853,21 @@ function PrefsStep({
                       : { bubble: true, bubbleSize: size },
                   )
                 }
+              />
+            </div>
+            <div className="pref-row">
+              <span>
+                <strong>Auto-zoom into key moments</strong>
+                <small>Zooms where you point. Every zoom is editable.</small>
+              </span>
+              <Choice
+                label="Auto-zoom"
+                value={v("autoZoom") ? "on" : "off"}
+                options={[
+                  ["on", "On"],
+                  ["off", "Off"],
+                ]}
+                onChange={(o) => update({ autoZoom: o === "on" })}
               />
             </div>
             <div className="pref-row">
@@ -858,19 +891,29 @@ function PrefsStep({
           <span>
             <strong>On-device transcription</strong>
             <small>
-              {ai.status === "complete"
-                ? "Ready. Transcripts and captions work offline."
-                : ai.status === "failed"
-                  ? "Couldn’t download right now. Relay retries when you transcribe."
-                  : "A one-time 40 MB download. Your audio never leaves this machine."}
+              {ai.status === "unsupported"
+                ? "Needs an Apple Silicon Mac. You can still import captions."
+                : ai.status === "complete"
+                  ? "Ready. Transcripts and captions work offline."
+                  : ai.status === "failed"
+                    ? "Couldn’t download right now. Relay retries when you transcribe."
+                    : "A one-time 40 MB download. Your audio never leaves this machine."}
             </small>
           </span>
-          {ai.status === "complete" ? (
+          {ai.status === "unsupported" ? (
+            <span className="permission-state soft">Not available</span>
+          ) : ai.status === "complete" ? (
             <span className="permission-state">
               <Check size={14} /> Ready
             </span>
           ) : ai.status === "running" ? (
-            <span className="ai-progress" role="progressbar" aria-valuenow={ai.progress} aria-valuemin={0} aria-valuemax={100}>
+            <span
+              className="ai-progress"
+              role="progressbar"
+              aria-valuenow={ai.progress}
+              aria-valuemin={0}
+              aria-valuemax={100}
+            >
               <LoaderCircle size={14} className="spin" />
               <i>
                 <b style={{ width: `${Math.max(4, ai.progress)}%` }} />
@@ -882,7 +925,8 @@ function PrefsStep({
               disabled={ai.status === "checking"}
               onClick={() => void prepare()}
             >
-              <Download size={14} /> {ai.status === "failed" ? "Try again" : "Download now"}
+              <Download size={14} />{" "}
+              {ai.status === "failed" ? "Try again" : "Download now"}
             </button>
           )}
         </div>
@@ -891,7 +935,7 @@ function PrefsStep({
         <div className="shortcut-card">
           <Keyboard size={17} />
           <span>
-            <kbd>⌘⇧R</kbd> start / finish
+            <kbd>⌥⇧R</kbd> start / finish
           </span>
           <span>
             <kbd>⌥⇧P</kbd> pause

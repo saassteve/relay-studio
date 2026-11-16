@@ -54,3 +54,42 @@ export const parseJSON = (value, fallback) => {
 };
 export const problem = (status, message, extra = {}) =>
   Object.assign(new Error(message), { status, ...extra });
+
+// Media is only ever served with a known audio/video type, whatever was stored.
+const MEDIA_TYPES = new Set([
+  "video/mp4",
+  "video/webm",
+  "audio/webm",
+  "audio/mp4",
+]);
+export function safeMime(value) {
+  const base = String(value || "")
+    .split(";")[0]
+    .trim()
+    .toLowerCase();
+  return MEDIA_TYPES.has(base) ? base : "application/octet-stream";
+}
+export function mediaHeaders(res, mime) {
+  res.set({
+    "Content-Type": safeMime(mime),
+    "Content-Security-Policy": "sandbox",
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "private, no-store",
+  });
+}
+// Keeps job errors useful without exposing command lines or server paths.
+export function publicError(error) {
+  const text = String(error?.message || error || "This job failed.");
+  if (!/Command failed:/.test(text)) return text.slice(0, 500);
+  const detail = text
+    .split("\n")
+    .slice(1)
+    .map((l) => l.replace(/(?:\/[^\s'":]+)+/g, "…").trim())
+    .filter(Boolean)
+    .slice(-3)
+    .join(" ");
+  return `The media engine couldn't process this${detail ? `: ${detail}` : "."}`.slice(
+    0,
+    500,
+  );
+}

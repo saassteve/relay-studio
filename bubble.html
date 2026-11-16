@@ -1,11 +1,7 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
-    <meta charset="utf-8" />
-    <meta
-      http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; media-src 'self' mediastream: blob:"
-    />
+    <meta charset="UTF-8" />
     <title>Relay camera</title>
     <style>
       html,
@@ -94,6 +90,6 @@
       <button data-size="l" aria-label="Large bubble">L</button>
       <button id="hide" aria-label="Hide bubble">✕</button>
     </div>
-    <script src="bubble.js"></script>
+    <script type="module" src="/src/bubble.ts"></script>
   </body>
 </html>

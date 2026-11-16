@@ -50,30 +50,36 @@ try {
   await setup.getByRole("button", { name: /Let’s get set up/ }).click();
   await setup.getByLabel("Your name").fill("Morgan Lee");
   await setup.getByRole("button", { name: "Continue" }).click();
-  await setup.getByRole("heading", { name: "A few quick permissions." }).waitFor();
+  await setup
+    .getByRole("heading", { name: "A few quick permissions." })
+    .waitFor();
   for (const kind of ["screen", "camera", "microphone", "audio"])
     await setup.locator(`[data-permission="${kind}"]`).waitFor();
-  await window.screenshot({ path: "test-results/desktop-onboarding-permissions.png" });
+  await window.screenshot({
+    path: "test-results/desktop-onboarding-permissions.png",
+  });
   await window.reload();
-  await setup.getByRole("heading", { name: "A few quick permissions." }).waitFor();
+  await setup
+    .getByRole("heading", { name: "A few quick permissions." })
+    .waitFor();
   await window.keyboard.press("Escape");
   await setup.waitFor({ state: "hidden" });
-  await window.waitForFunction(
-    () => document.querySelector(".workspace-avatar")?.textContent?.startsWith("M"),
+  await window.waitForFunction(() =>
+    document.querySelector(".workspace-avatar")?.textContent?.startsWith("M"),
   );
   assert.ok(
-    (await app.evaluate(({ Menu }) =>
+    await app.evaluate(({ Menu }) =>
       Menu.getApplicationMenu()
         .items.flatMap((i) => i.submenu?.items || [])
         .some((i) => i.label === "Setup guide"),
-    )),
+    ),
   );
   assert.equal(
     await window.evaluate(() => window.relayDesktop.platform),
     process.platform,
   );
   const registered = await app.evaluate(({ globalShortcut }) =>
-    globalShortcut.isRegistered("CommandOrControl+Shift+R"),
+    globalShortcut.isRegistered("Alt+Shift+R"),
   );
   assert.equal(registered, true);
   await app.evaluate(({ BrowserWindow }) =>
@@ -162,7 +168,10 @@ try {
   countdown = await countdownWindow;
   await countdown.waitForSelector("#dial");
   assert.equal(await isVisible(), false, "Studio hides during capture");
-  await countdown.locator("#dial").click().catch(() => {});
+  await countdown
+    .locator("#dial")
+    .click()
+    .catch(() => {});
   assert.deepEqual(await started, { cancelled: false });
   assert.equal(await isVisible(), false);
   assert.equal(
@@ -170,7 +179,10 @@ try {
     null,
   );
   const shortcut = (key) =>
-    app.evaluate(({ globalShortcut }, k) => globalShortcut.isRegistered(k), key);
+    app.evaluate(
+      ({ globalShortcut }, k) => globalShortcut.isRegistered(k),
+      key,
+    );
   assert.equal(await shortcut("Alt+Shift+P"), false);
   await window.evaluate(() =>
     window.relayDesktop.captureState({
@@ -197,7 +209,10 @@ try {
       notes: "",
     }),
   );
-  await until(async () => !(await shortcut("Alt+Shift+P")), "Shortcut released");
+  await until(
+    async () => !(await shortcut("Alt+Shift+P")),
+    "Shortcut released",
+  );
   await until(isVisible, "Studio returns after recording");
   await window.screenshot({ path: "test-results/desktop-studio.png" });
   console.log(

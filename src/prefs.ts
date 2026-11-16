@@ -1,4 +1,5 @@
 import { api, type Mode, type BubbleSize } from "./types";
+import type { CameraFilter } from "./cameraEffects";
 
 // Studio preferences are stored with the library on the server, so they survive
 // origin changes (desktop port, reinstall) that would reset browser storage.
@@ -15,6 +16,9 @@ export interface Preferences {
   microphoneId?: string;
   cameraId?: string;
   systemAudio?: boolean;
+  autoZoom?: boolean;
+  cameraFilter?: CameraFilter;
+  cameraBackground?: string;
 }
 export const defaults: Required<
   Omit<Preferences, "onboardingStep" | "microphoneId" | "cameraId" | "mode">
@@ -27,17 +31,29 @@ export const defaults: Required<
   bubbleSize: "m",
   quality: 1920,
   systemAudio: true,
+  autoZoom: true,
+  cameraFilter: "none",
+  cameraBackground: "none",
 };
 let cache: Preferences | null = null;
+let loaded = false;
 let loading: Promise<Preferences> | null = null;
+// Changes not yet confirmed by the server; resent with the next save.
+let unsaved: Record<string, unknown> = {};
+let latestWrite = 0;
 const listeners = new Set<(p: Preferences) => void>();
 export function loadPreferences(force = false): Promise<Preferences> {
-  if (cache && !force) return Promise.resolve(cache);
+  if (cache && loaded && !force) return Promise.resolve(cache);
   return (loading ??= api<Preferences>("/api/preferences")
-    .then((p) => (cache = p))
-    .catch(() => (cache = {}))
+    .then((p) => {
+      loaded = true;
+      return (cache = { ...p, ...unsaved } as Preferences);
+    })
+    // A failed load keeps whatever we already knew.
+    .catch(() => (cache ??= {}))
     .finally(() => (loading = null)));
 }
+export const preferencesLoaded = () => loaded;
 export function cachedPreferences(): Preferences {
   return cache || {};
 }
@@ -50,14 +66,21 @@ export async function savePreferences(
   next: Partial<{ [K in keyof Preferences]: Preferences[K] | null }>,
 ): Promise<Preferences> {
   cache = { ...(cache || {}), ...next } as Preferences;
+  unsaved = { ...unsaved, ...next };
   listeners.forEach((fn) => fn(cache!));
+  const write = ++latestWrite,
+    sending = unsaved;
   try {
-    cache = await api<Preferences>("/api/preferences", {
+    const saved = await api<Preferences>("/api/preferences", {
       method: "PUT",
-      body: JSON.stringify(next),
+      body: JSON.stringify(sending),
     });
+    for (const key of Object.keys(sending))
+      if (unsaved[key] === sending[key]) delete unsaved[key];
+    // An older response must not overwrite a newer choice.
+    if (write === latestWrite) cache = { ...saved, ...unsaved } as Preferences;
   } catch {
-    /* Keep the optimistic value; it will be written on the next change. */
+    /* Kept in `unsaved`; it goes out with the next change. */
   }
   listeners.forEach((fn) => fn(cache!));
   return cache!;

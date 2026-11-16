@@ -1,0 +1,16 @@
+name: Feature request
+description: An idea that would make Relay better.
+labels: [enhancement]
+body:
+  - type: textarea
+    attributes:
+      label: What would you like to do?
+      description: Describe the problem or moment where Relay falls short.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: How might it work?
+  - type: textarea
+    attributes:
+      label: Anything else?

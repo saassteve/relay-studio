@@ -155,6 +155,18 @@ test("durable separate tracks survive a restart, compose, edit, publish and roun
     await h.json(`/api/recordings/${id}/finish`, {
       duration: 2.5,
       title: "Recovered multi-track capture",
+      // The pointer travels, then rests on one spot: an automatic zoom target.
+      meta: {
+        autoZoom: true,
+        pointers: [
+          { time: 0, x: 0.1, y: 0.8 },
+          ...Array.from({ length: 9 }, (_, i) => ({
+            time: 0.2 + i * 0.15,
+            x: 0.7,
+            y: 0.3,
+          })),
+        ],
+      },
     }),
   );
   const videoId = done.result.videoId;
@@ -164,6 +176,12 @@ test("durable separate tracks survive a restart, compose, edit, publish and roun
   assert.ok(video.thumbnail);
   let state = await (await h.request(`/api/videos/${videoId}/project`)).json();
   assert.equal(state.sources.length, 3);
+  const auto = state.project.overlays.filter((o) => o.auto);
+  assert.equal(auto.length, 1, "first render zooms into the key moment");
+  assert.equal(auto[0].type, "zoom");
+  assert.ok(
+    Math.abs(auto[0].x - 0.7) < 0.01 && Math.abs(auto[0].y - 0.3) < 0.01,
+  );
   assert.equal(state.project.layout.width, 320);
   assert.equal(state.project.layout.height, 180);
   const shared = await h.json(`/api/videos/${videoId}/share`);
@@ -393,8 +411,10 @@ test("video gates, expiry, download controls, watched intervals, threaded feedba
     "PATCH",
     owner,
   );
-  const resolved=await (await h.request(`/api/videos/${video.id}`,{headers:owner})).json();
-  assert.ok(resolved.comments.every(c=>c.resolved));
+  const resolved = await (
+    await h.request(`/api/videos/${video.id}`, { headers: owner })
+  ).json();
+  assert.ok(resolved.comments.every((c) => c.resolved));
   const invitation = await h.json(
     "/api/team/invitations",
     { email: "viewer@example.com", name: "Viewer", role: "viewer" },

@@ -26,8 +26,8 @@ module.exports = {
     category: "public.app-category.productivity",
     icon: "desktop/icon.icns",
     target: [
-      { target: "dmg", arch: ["arm64"] },
-      { target: "zip", arch: ["arm64"] },
+      { target: "dmg", arch: ["arm64", "x64"] },
+      { target: "zip", arch: ["arm64", "x64"] },
     ],
     // A version-free name gives a permanent "latest" download link.
     artifactName: "Relay-mac-${arch}.${ext}",

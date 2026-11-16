@@ -6,7 +6,10 @@ import { mkdtempSync, rmSync, mkdirSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+const root = path.resolve(
+  path.dirname(new URL(import.meta.url).pathname),
+  "..",
+);
 const out = path.join(root, "docs", "images");
 const dmgOut = path.join(root, "desktop", "dmg");
 mkdirSync(out, { recursive: true });
@@ -16,7 +19,12 @@ const port = 5199,
   data = mkdtempSync(path.join(os.tmpdir(), "relay-shots-"));
 const server = spawn(process.execPath, ["server/index.mjs"], {
   cwd: root,
-  env: { ...process.env, PORT: String(port), NODE_ENV: "production", DATA_DIR: data },
+  env: {
+    ...process.env,
+    PORT: String(port),
+    NODE_ENV: "production",
+    DATA_DIR: data,
+  },
   stdio: "inherit",
 });
 for (let i = 0; ; i++) {
@@ -36,8 +44,12 @@ try {
     deviceScaleFactor: 2,
   });
   const page = await context.newPage();
-  await page.request.put(`${base}/api/profile`, { data: { name: "Alex Rivera" } });
-  await page.request.put(`${base}/api/preferences`, { data: { onboarded: true } });
+  await page.request.put(`${base}/api/profile`, {
+    data: { name: "Alex Rivera" },
+  });
+  await page.request.put(`${base}/api/preferences`, {
+    data: { onboarded: true },
+  });
   await page.goto(base);
 
   // Demo recordings drawn on a canvas, recorded with MediaRecorder and uploaded via the API.
@@ -52,7 +64,8 @@ try {
   for (const [title, kind, folder, starred, views] of demos) {
     await page.evaluate(
       async ({ title, kind }) => {
-        const W = 1280, H = 720;
+        const W = 1280,
+          H = 720;
         const c = document.createElement("canvas");
         c.width = W;
         c.height = H;
@@ -89,7 +102,14 @@ try {
               g.fillText(col.toUpperCase(), x, 165);
               for (let k = 0; k < 4 - i; k++) {
                 rr(x, 185 + k * 110, 360, 92, 12, "#fff");
-                rr(x + 18, 205 + k * 110, 60, 10, 5, ["#d6f475", "#bfe3f5", "#f6d9a8"][(i + k) % 3]);
+                rr(
+                  x + 18,
+                  205 + k * 110,
+                  60,
+                  10,
+                  5,
+                  ["#d6f475", "#bfe3f5", "#f6d9a8"][(i + k) % 3],
+                );
                 rr(x + 18, 230 + k * 110, 260 - k * 30, 12, 6, "#dfe4d8");
                 rr(x + 18, 252 + k * 110, 180, 12, 6, "#ecefe7");
               }
@@ -101,7 +121,14 @@ try {
             g.fillText("Checkout", 80, 120);
             for (let k = 0; k < 3; k++) {
               rr(80, 160 + k * 96, 640, 80, 12, "#f4f6f1");
-              rr(100, 178 + k * 96, 44, 44, 8, ["#f6d9a8", "#bfe3f5", "#d6f475"][k]);
+              rr(
+                100,
+                178 + k * 96,
+                44,
+                44,
+                8,
+                ["#f6d9a8", "#bfe3f5", "#d6f475"][k],
+              );
               rr(164, 186 + k * 96, 220, 12, 6, "#cfd6c7");
               g.font = font(600, 20);
               g.fillStyle = "#1d2a24";
@@ -125,10 +152,21 @@ try {
             [0, 1, 2].forEach((i) => {
               const x = 150 + i * 360;
               rr(x, 80 + (i === 1 ? -20 : 20), 270, 560, 36, "#173e32");
-              rr(x + 14, 96 + (i === 1 ? -20 : 20), 242, 528, 26, i === 1 ? "#d6f475" : "#fbfcf8");
+              rr(
+                x + 14,
+                96 + (i === 1 ? -20 : 20),
+                242,
+                528,
+                26,
+                i === 1 ? "#d6f475" : "#fbfcf8",
+              );
               g.fillStyle = "#173e32";
               g.font = font(700, 26);
-              g.fillText(["Welcome", "Allow access", "You’re set"][i], x + 36, 200 + (i === 1 ? -20 : 20));
+              g.fillText(
+                ["Welcome", "Allow access", "You’re set"][i],
+                x + 36,
+                200 + (i === 1 ? -20 : 20),
+              );
               rr(x + 36, 520 + (i === 1 ? -20 : 20), 198, 46, 23, "#173e32");
             });
           } else if (kind === "chart") {
@@ -142,7 +180,14 @@ try {
             const vals = [38, 44, 41, 52, 58, 61, 67, 72, 70, 81, 88, 96];
             vals.forEach((v, i) => {
               const h = v * 4.4 * Math.min(1, t / 1.5 + 0.4);
-              rr(80 + i * 95, 640 - h, 62, h, 8, i === vals.length - 1 ? "#d6f475" : "#2f6a52");
+              rr(
+                80 + i * 95,
+                640 - h,
+                62,
+                h,
+                8,
+                i === vals.length - 1 ? "#d6f475" : "#2f6a52",
+              );
             });
           } else if (kind === "terminal") {
             g.fillStyle = "#10241c";
@@ -167,7 +212,14 @@ try {
             g.font = font(700, 40);
             g.fillText("Simple pricing", 470, 140);
             ["Starter", "Team", "Business"].forEach((p, i) => {
-              rr(160 + i * 330, 200, 300, 400, 18, i === 1 ? "#173e32" : "#f4f6f1");
+              rr(
+                160 + i * 330,
+                200,
+                300,
+                400,
+                18,
+                i === 1 ? "#173e32" : "#f4f6f1",
+              );
               g.fillStyle = i === 1 ? "#d6f475" : "#1d2a24";
               g.font = font(700, 26);
               g.fillText(p, 190 + i * 330, 260);
@@ -180,7 +232,9 @@ try {
             g.fillText("💬 Make Team the default?", 840, 172);
           }
           // Camera bubble, as it appears in a Relay recording.
-          const r = 78, cx = 100, cy = H - 100;
+          const r = 78,
+            cx = 100,
+            cy = H - 100;
           g.beginPath();
           g.arc(cx, cy, r + 5, 0, 7);
           g.fillStyle = "#d6f475";
@@ -202,7 +256,9 @@ try {
         };
         await document.fonts.ready;
         const stream = c.captureStream(24);
-        const rec = new MediaRecorder(stream, { mimeType: "video/webm;codecs=vp8" });
+        const rec = new MediaRecorder(stream, {
+          mimeType: "video/webm;codecs=vp8",
+        });
         const chunks = [];
         rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
         const start = performance.now();
@@ -225,7 +281,11 @@ try {
         thumb.height = 360;
         thumb.getContext("2d").drawImage(c, 0, 0, 640, 360);
         const form = new FormData();
-        form.append("video", new Blob(chunks, { type: "video/webm" }), "demo.webm");
+        form.append(
+          "video",
+          new Blob(chunks, { type: "video/webm" }),
+          "demo.webm",
+        );
         form.append("title", title);
         form.append("duration", String(60 + Math.floor(Math.random() * 400)));
         form.append("thumbnail", thumb.toDataURL("image/jpeg", 0.85));
@@ -247,7 +307,9 @@ try {
   await page.waitForSelector(".video-card img");
   await page.waitForTimeout(800);
   await page.screenshot({ path: path.join(out, "library.png") });
-  await page.evaluate(() => document.querySelector(".library-section")?.scrollIntoView());
+  await page.evaluate(() =>
+    document.querySelector(".library-section")?.scrollIntoView(),
+  );
   await page.waitForTimeout(400);
   await page.screenshot({ path: path.join(out, "library-grid.png") });
 
@@ -265,10 +327,115 @@ try {
   // Recorder
   await page.setViewportSize({ width: 1440, height: 1180 });
   await page.goto(base);
-  await page.getByRole("button", { name: /New recording/ }).first().click();
+  await page
+    .getByRole("button", { name: /New recording/ })
+    .first()
+    .click();
   await page.waitForSelector(".recorder-dialog");
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(out, "recorder.png") });
+
+  // Camera looks, using an illustrated presenter in place of a real camera.
+  const lookPage = await context.newPage();
+  await lookPage.setViewportSize({ width: 1440, height: 1180 });
+  await lookPage.addInitScript(() => {
+    const presenter = () => {
+      const c = document.createElement("canvas");
+      c.width = 960;
+      c.height = 720;
+      const g = c.getContext("2d");
+      let t = 0;
+      setInterval(() => {
+        t += 0.04;
+        // A plain room behind the presenter.
+        const wall = g.createLinearGradient(0, 0, 0, 720);
+        wall.addColorStop(0, "#d9d4cb");
+        wall.addColorStop(1, "#b9b2a6");
+        g.fillStyle = wall;
+        g.fillRect(0, 0, 960, 720);
+        g.fillStyle = "#a08f78";
+        g.fillRect(90, 120, 160, 260);
+        g.fillStyle = "#7c8a6a";
+        g.beginPath();
+        g.ellipse(760, 300, 70, 120, 0, 0, 7);
+        g.fill();
+        const sway = Math.sin(t) * 6;
+        // Shoulders and shirt
+        g.fillStyle = "#2f5d8a";
+        g.beginPath();
+        g.ellipse(480 + sway, 720, 300, 210, 0, Math.PI, 0);
+        g.fill();
+        // Neck
+        g.fillStyle = "#d9a07f";
+        g.fillRect(445 + sway, 430, 70, 90);
+        // Head
+        g.beginPath();
+        g.ellipse(480 + sway, 350, 118, 142, 0, 0, 7);
+        g.fill();
+        // Hair
+        g.fillStyle = "#3b2a20";
+        g.beginPath();
+        g.ellipse(480 + sway, 268, 128, 78, 0, Math.PI, 0);
+        g.fill();
+        g.fillRect(352 + sway, 262, 24, 80);
+        g.fillRect(584 + sway, 262, 24, 80);
+        // Face
+        g.fillStyle = "#2a1f19";
+        g.beginPath();
+        g.arc(438 + sway, 350, 9, 0, 7);
+        g.arc(522 + sway, 350, 9, 0, 7);
+        g.fill();
+        g.strokeStyle = "#8a4b3a";
+        g.lineWidth = 6;
+        g.beginPath();
+        g.arc(480 + sway, 400, 34, 0.2, Math.PI - 0.2);
+        g.stroke();
+      }, 33);
+      return c.captureStream(30);
+    };
+    const original = navigator.mediaDevices.getUserMedia.bind(
+      navigator.mediaDevices,
+    );
+    navigator.mediaDevices.getUserMedia = async (c) =>
+      c && c.video ? presenter() : original(c);
+  });
+  await lookPage.request.put(`${base}/api/preferences`, {
+    data: { cameraFilter: "vivid", cameraBackground: "none" },
+  });
+  await lookPage.goto(base);
+  await lookPage
+    .getByRole("button", { name: /New recording/ })
+    .first()
+    .click();
+  await lookPage
+    .getByRole("button", { name: "Screen + camera", exact: true })
+    .click();
+  await lookPage.locator(".look-preview video").waitFor();
+  await lookPage.waitForFunction(
+    () => !document.querySelector(".look-busy"),
+    null,
+    {
+      timeout: 60000,
+    },
+  );
+  await lookPage.waitForTimeout(1500);
+  await lookPage.evaluate(() =>
+    document.querySelector(".camera-look")?.scrollIntoView({ block: "center" }),
+  );
+  const box = await lookPage.locator(".camera-look").boundingBox();
+  await lookPage.screenshot({
+    path: path.join(out, "camera-looks.png"),
+    clip: {
+      x: box.x - 24,
+      y: box.y - 20,
+      width: box.width + 48,
+      height: box.height + 40,
+    },
+  });
+  await lookPage.close();
+  await page.request.put(`${base}/api/preferences`, {
+    data: { cameraFilter: "none", cameraBackground: "none" },
+  });
 
   await page.setViewportSize({ width: 1440, height: 900 });
   // Onboarding
@@ -281,7 +448,10 @@ try {
   await page.screenshot({ path: path.join(out, "onboarding.png") });
   await page.getByRole("button", { name: /Let’s get set up/ }).click();
   await page.getByRole("button", { name: "Continue" }).click();
-  await page.getByRole("button", { name: "Continue" }).click().catch(() => {});
+  await page
+    .getByRole("button", { name: "Continue" })
+    .click()
+    .catch(() => {});
   await page.getByRole("heading", { name: "Make it yours." }).waitFor();
   await page.waitForTimeout(400);
   await page.screenshot({ path: path.join(out, "onboarding-preferences.png") });

@@ -21,10 +21,9 @@ export function registerIntegrations({
       /^Bearer /,
       "",
     );
-    if (
-      given.length !== token.length ||
-      !timingSafeEqual(Buffer.from(given), Buffer.from(token))
-    )
+    const a = Buffer.from(given),
+      b = Buffer.from(token);
+    if (a.length !== b.length || !timingSafeEqual(a, b))
       return res
         .status(401)
         .json({ error: "A valid Relay integration token is required." });

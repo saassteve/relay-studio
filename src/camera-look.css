@@ -1,0 +1,124 @@
+.camera-look {
+  display: flex;
+  gap: 22px;
+  align-items: center;
+}
+.look-preview {
+  position: relative;
+  flex-shrink: 0;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--pine);
+  box-shadow:
+    0 0 0 4px var(--lime),
+    0 14px 40px #173e3233;
+}
+.look-preview video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+}
+.look-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--lime);
+  text-align: center;
+  padding: 16px;
+}
+.look-empty small {
+  font-size: 11px;
+  color: #c3d1c6;
+}
+.look-busy {
+  position: absolute;
+  right: 12%;
+  bottom: 12%;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: #0f2a20cc;
+  color: var(--lime);
+}
+.look-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.look-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #5d6b61;
+}
+.look-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.look-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px 5px 5px;
+  border-radius: 99px;
+  border: 1px solid var(--border);
+  background: #fffffb;
+  font-size: 11px;
+  font-weight: 550;
+  color: #4d5a50;
+}
+.look-chip.selected {
+  border-color: var(--pine);
+  background: #eef2e6;
+  color: var(--pine);
+}
+.filter-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 38%, #f3d2b5 0 22%, transparent 23%),
+    radial-gradient(ellipse at 50% 100%, #3d7bd9 0 42%, transparent 43%),
+    linear-gradient(135deg, #8fd0ff, #ffd28f);
+}
+.bg-chip {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: #f1f4ea;
+  display: grid;
+  place-items: center;
+  color: #6c786f;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+}
+.bg-chip.selected {
+  outline-color: var(--pine);
+}
+.bg-chip.add {
+  border-style: dashed;
+  background: #fffffb;
+}
+.blur-swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #9ab7a8, #e5ece0);
+  filter: blur(3px);
+}
+@media (max-width: 700px) {
+  .camera-look {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

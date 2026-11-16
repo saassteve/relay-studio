@@ -99,6 +99,7 @@ export function validateProject(input, find) {
       scale: number(o.scale ?? 1.8, 1, 4, "zoom"),
       text: String(o.text || "").slice(0, 500),
       color: /^#[a-f0-9]{6}$/i.test(o.color || "") ? o.color : "#d6f475",
+      ...(o.type === "zoom" && o.auto === true ? { auto: true } : {}),
     };
   });
   const cta = {

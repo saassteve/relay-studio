@@ -11,11 +11,14 @@ import {
   rmSync,
   renameSync,
   statSync,
+  openSync,
+  readSync,
+  closeSync,
 } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import path from "node:path";
 import { getProject, validateProject } from "./project.mjs";
-import { parseJSON, problem } from "./schema.mjs";
+import { parseJSON, problem, safeMime } from "./schema.mjs";
 const hashFile = async (file) => {
   const hash = createHash("sha256");
   for await (const data of createReadStream(file)) hash.update(data);
@@ -154,6 +157,21 @@ export function registerPortable({
               statSync(file).size !== asset.size
             )
               throw problem(400, "A source track failed its integrity check.");
+            // Only WebM or MP4 containers are handed to the media engine.
+            const head = Buffer.alloc(12),
+              fd = openSync(file, "r");
+            try {
+              readSync(fd, head, 0, 12, 0);
+            } finally {
+              closeSync(fd);
+            }
+            if (
+              !head
+                .subarray(0, 4)
+                .equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3])) &&
+              head.subarray(4, 8).toString() !== "ftyp"
+            )
+              throw problem(415, "A bundled source is not readable media.");
             const info = await import("./render.mjs").then((m) =>
               m.probe(file),
             );
@@ -185,7 +203,7 @@ export function registerPortable({
               String(s.description || "").slice(0, 20000),
               row.primary.duration,
               row.primary.size,
-              row.primary.mime,
+              safeMime(row.primary.mime),
               row.primary.filename,
               typeof s.thumbnail === "string" &&
                 s.thumbnail.startsWith("data:image/jpeg;base64,") &&
@@ -193,7 +211,24 @@ export function registerPortable({
                 ? s.thumbnail
                 : null,
               new Date().toISOString(),
-              JSON.stringify(Array.isArray(s.transcript) ? s.transcript : []),
+              JSON.stringify(
+                (Array.isArray(s.transcript) ? s.transcript : [])
+                  .slice(0, 100000)
+                  .map((w) => ({
+                    text: String(w?.text ?? "").slice(0, 2000),
+                    start: Number(w?.start),
+                    end: Number(w?.end),
+                    granularity:
+                      w?.granularity === "segment" ? "segment" : "word",
+                  }))
+                  .filter(
+                    (w) =>
+                      Number.isFinite(w.start) &&
+                      Number.isFinite(w.end) &&
+                      w.start >= 0 &&
+                      w.end > w.start,
+                  ),
+              ),
               JSON.stringify(s.outline || {}),
             );
             for (const a of row.assets)
@@ -201,7 +236,7 @@ export function registerPortable({
                 row.id,
                 a.role,
                 a.filename,
-                a.mime,
+                safeMime(a.mime),
                 a.duration,
                 JSON.stringify(a.info),
               );

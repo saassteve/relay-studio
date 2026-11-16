@@ -86,6 +86,8 @@ declare global {
         bubble: boolean;
         bubbleSize: BubbleSize;
         cameraId: string;
+        filter?: string;
+        background?: string;
       }) => Promise<{ cancelled: boolean }>;
       cameraLayout?: () => Promise<Partial<Project["layout"]["camera"]> | null>;
     };
@@ -110,7 +112,12 @@ export async function api<T>(
       ...options.headers,
     },
   });
-  const data = await response.json();
+  // A proxy or crash can answer with a non-JSON page; keep the message readable.
+  const data = await response.json().catch(() => ({
+    error: response.ok
+      ? "Relay sent an unreadable response."
+      : `Request failed (${response.status}${response.statusText ? ` ${response.statusText}` : ""}).`,
+  }));
   if (!response.ok)
     throw Object.assign(
       new Error(data.error || "Could not complete that request."),
@@ -165,6 +172,7 @@ export interface Project {
     scale: number;
     text: string;
     color: string;
+    auto?: boolean;
   }[];
   cta: { label: string; url: string };
 }

@@ -15,5 +15,10 @@ export default defineConfig({
       ],
     },
   },
-  build: { outDir: "dist" },
+  build: {
+    outDir: "dist",
+    rollupOptions: {
+      input: { main: "index.html", bubble: "bubble.html" },
+    },
+  },
 });

@@ -15,7 +15,7 @@ import { createRenderer } from "./render.mjs";
 import { registerRecordings } from "./recordings.mjs";
 import { registerSharing } from "./sharing.mjs";
 import { createTranscription } from "./transcription.mjs";
-import { parseJSON, problem } from "./schema.mjs";
+import { parseJSON, problem, mediaHeaders } from "./schema.mjs";
 import {
   getProject,
   validateProject,
@@ -27,6 +27,7 @@ import {
   cutRanges,
 } from "./project.mjs";
 import { registerPortable } from "./portable.mjs";
+import { autoZoom } from "./autozoom.mjs";
 import { registerIntegrations } from "./integrations.mjs";
 const run = promisify(execFile);
 export function registerStudio(context) {
@@ -159,10 +160,8 @@ export function registerStudio(context) {
       assets = renderer.assetsFor(v),
       asset = assets.find((a) => a.role === req.params.role);
     if (!asset) throw problem(404, "This source track was not found.");
-    res
-      .type(asset.mime)
-      .set("Cache-Control", "private, no-store")
-      .sendFile(asset.filename, { root: path.join(dataDir, "media") });
+    mediaHeaders(res, asset.mime);
+    res.sendFile(asset.filename, { root: path.join(dataDir, "media") });
   });
   app.post("/api/videos/:id/render", owner, (req, res) => {
     const v = find(req.params.id),
@@ -249,6 +248,7 @@ export function registerStudio(context) {
   jobs.register("prepare-ai", transcription.prepare);
   app.get("/api/ai/status", owner, (req, res) =>
     res.json({
+      supported: transcription.supported,
       models: transcription.models.map((model) => ({
         model,
         ready: transcription.modelReady(model),
@@ -338,34 +338,18 @@ export function registerStudio(context) {
         .prepare("SELECT meta FROM recordings WHERE video_id=?")
         .get(v.id),
       points = parseJSON(recording?.meta, {}).pointers || [],
-      effects = [];
-    let last = -10;
-    for (let i = 1; i < points.length; i++) {
-      const a = points[i - 1],
-        b = points[i];
-      if (
-        b.time - last >= 6 &&
-        Math.hypot(b.x - a.x, b.y - a.y) > 0.12 &&
-        b.time < v.duration - 0.4
-      ) {
-        effects.push({
-          id: randomUUID(),
-          type: "zoom",
-          start: b.time,
-          end: Math.min(v.duration, b.time + 3),
-          x: Math.max(0, Math.min(0.95, b.x)),
-          y: Math.max(0, Math.min(0.95, b.y)),
-          w: 0.3,
-          h: 0.2,
-          scale: 1.6,
-          text: "",
-          color: "#d6f475",
-        });
-        last = b.time;
-        if (effects.length >= 12) break;
-      }
-    }
-    res.json(effects);
+      project = getProject(v);
+    const existing = project.overlays.filter((o) => o.type === "zoom");
+    // Skip moments that already have a zoom.
+    res.json(
+      autoZoom(points, {
+        segments: project.segments,
+        sourceId: v.id,
+        duration: v.duration,
+      }).filter(
+        (z) => !existing.some((e) => z.start < e.end && z.end > e.start),
+      ),
+    );
   });
   app.post("/api/videos/:id/suggestions", owner, async (req, res) =>
     res.json(await transcription.suggestions(req.params.id)),
@@ -390,7 +374,7 @@ export function registerStudio(context) {
     const selected = variants.filter((v) => v.height <= info.height);
     if (!selected.length)
       selected.push({
-        height: Math.max(180, Math.floor(info.height / 2) * 2),
+        height: Math.max(180, Math.floor((info.height || 360) / 2) * 2),
         rate: "650k",
         bandwidth: 850000,
       });

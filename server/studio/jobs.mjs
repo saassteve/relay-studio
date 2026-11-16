@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { parseJSON, problem } from "./schema.mjs";
+import { parseJSON, problem, publicError } from "./schema.mjs";
 export function createJobs(db) {
   const handlers = new Map();
   const working = new Set();
@@ -21,7 +21,18 @@ export function createJobs(db) {
             `SELECT * FROM jobs WHERE status='queued' AND type ${lane === "ai" ? "IN" : "NOT IN"} ('transcribe','summarize','prepare-ai') ORDER BY CASE type WHEN 'finish-recording' THEN 0 WHEN 'render' THEN 1 ELSE 2 END,created LIMIT 1`,
           )
           .get();
-        if (!row || !handlers.has(row.type)) break;
+        if (!row) break;
+        if (!handlers.has(row.type)) {
+          // A job from another version would otherwise block its whole lane.
+          db.prepare(
+            "UPDATE jobs SET status='failed',error=?,updated=? WHERE id=?",
+          ).run(
+            "This job type isn't supported by this version of Relay.",
+            new Date().toISOString(),
+            row.id,
+          );
+          continue;
+        }
         db.prepare("UPDATE jobs SET status='running',updated=? WHERE id=?").run(
           new Date().toISOString(),
           row.id,
@@ -53,11 +64,7 @@ export function createJobs(db) {
             console.error(`Job ${row.type}:`, e.message);
             db.prepare(
               "UPDATE jobs SET status='failed',error=?,updated=? WHERE id=?",
-            ).run(
-              e.message || "This job failed.",
-              new Date().toISOString(),
-              row.id,
-            );
+            ).run(publicError(e), new Date().toISOString(), row.id);
           }
         }
       }

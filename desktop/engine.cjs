@@ -13,6 +13,11 @@ const ENGINES = {
     url: "https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffmpeg.zip",
     sha256: "c8ed4c4e6978a03c485edbfe4e0a5dc2380f8a30bba5150531b31b094492d924",
   },
+  "darwin-x64": {
+    version: "9.0.2",
+    url: "https://ffmpeg.martin-riedl.de/download/macos/amd64/1789931006_9.0.2/ffmpeg.zip",
+    sha256: "7c6b4125b191cbf773832dc51f424cf2b6bb7da43007d1e066f95909e47cacd4",
+  },
 };
 
 function bundledForDevelopment() {
@@ -30,7 +35,11 @@ function bundledForDevelopment() {
 function engineTarget() {
   const spec = ENGINES[`${process.platform}-${process.arch}`];
   if (!spec) return null;
-  const dir = path.join(app.getPath("userData"), "engine", `ffmpeg-${spec.version}`);
+  const dir = path.join(
+    app.getPath("userData"),
+    "engine",
+    `ffmpeg-${spec.version}`,
+  );
   return { spec, dir, binary: path.join(dir, "ffmpeg") };
 }
 
@@ -48,7 +57,9 @@ function usable(binary) {
 }
 
 async function download(target, onProgress) {
-  const response = await fetch(target.spec.url);
+  const response = await fetch(target.spec.url, {
+    signal: AbortSignal.timeout(300000),
+  });
   if (!response.ok || !response.body)
     throw new Error(`The download server answered ${response.status}.`);
   const total = Number(response.headers.get("content-length")) || 0;
@@ -81,12 +92,14 @@ async function download(target, onProgress) {
 
 // Resolves to an FFmpeg path, showing a small setup window the first time.
 module.exports = async function ensureEngine() {
-  if (process.env.FFMPEG_BIN) return process.env.FFMPEG_BIN;
+  // An override is for development; the packaged app only runs its verified engine.
+  if (process.env.FFMPEG_BIN && !app.isPackaged) return process.env.FFMPEG_BIN;
   const dev = !app.isPackaged && bundledForDevelopment();
   if (dev) return dev;
   const target = engineTarget();
   if (!target) return bundledForDevelopment() || "";
-  if (fs.existsSync(target.binary) && usable(target.binary)) return target.binary;
+  if (fs.existsSync(target.binary) && usable(target.binary))
+    return target.binary;
 
   const win = new BrowserWindow({
     width: 440,
@@ -141,7 +154,6 @@ module.exports = async function ensureEngine() {
             resolve(value);
           };
           ipcMain.on("relay:engine-choice", listener);
-
         });
         if (choice !== "retry") {
           finished = true;

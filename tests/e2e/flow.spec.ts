@@ -46,7 +46,9 @@ test("capture, edit, export, share, comment, revoke; responsive library", async 
   // First run: the guided setup opens over the library.
   const setup = page.getByRole("dialog", { name: "Set up Relay" });
   await expect(setup).toBeVisible();
-  await expect(setup.getByRole("heading", { name: /Say it once/ })).toBeVisible();
+  await expect(
+    setup.getByRole("heading", { name: /Say it once/ }),
+  ).toBeVisible();
   await page.screenshot({ path: "test-results/onboarding-welcome.png" });
   await setup.getByRole("button", { name: /Let’s get set up/ }).click();
   await setup.getByLabel("Your name").fill("Avery Quinn");
@@ -60,12 +62,16 @@ test("capture, edit, export, share, comment, revoke; responsive library", async 
   });
   await page.screenshot({ path: "test-results/onboarding-check.png" });
   await setup.getByRole("button", { name: "Continue" }).click();
-  await expect(setup.getByRole("heading", { name: "Make it yours." })).toBeVisible();
+  await expect(
+    setup.getByRole("heading", { name: "Make it yours." }),
+  ).toBeVisible();
   await setup.getByRole("radio", { name: "Just open editor" }).click();
   await setup.getByRole("radio", { name: "3 sec" }).click();
   await page.screenshot({ path: "test-results/onboarding-prefs.png" });
   await setup.getByRole("button", { name: "Looks good" }).click();
-  await expect(setup.getByRole("heading", { name: /You’re all set, Avery/ })).toBeVisible();
+  await expect(
+    setup.getByRole("heading", { name: /You’re all set, Avery/ }),
+  ).toBeVisible();
   // Reloading mid-way is safe; finishing persists on the server.
   const prefs = await (await page.request.get("/api/preferences")).json();
   expect(prefs).toMatchObject({
@@ -75,8 +81,12 @@ test("capture, edit, export, share, comment, revoke; responsive library", async 
   });
   await setup.getByRole("button", { name: "Take me to my library" }).click();
   await expect(setup).toBeHidden();
-  expect((await (await page.request.get("/api/preferences")).json()).onboarded).toBe(true);
-  await expect(page.locator(".workspace-picker")).toContainText("Avery’s workspace");
+  expect(
+    (await (await page.request.get("/api/preferences")).json()).onboarded,
+  ).toBe(true);
+  await expect(page.locator(".workspace-picker")).toContainText(
+    "Avery’s workspace",
+  );
   await page.reload();
   await expect(
     page.getByRole("heading", { name: "Ideas worth sharing." }),

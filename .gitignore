@@ -10,3 +10,4 @@ playwright-report/
 vendor/ffmpeg/*/
 vendor/ffmpeg/*.zip
 vendor/ffmpeg/*.sha256
+public/vendor/

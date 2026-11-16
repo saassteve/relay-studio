@@ -666,6 +666,7 @@ export function Editor({
                     <div className="reply-indicator">
                       Replying in thread
                       <button
+                        type="button"
                         className="text-button"
                         onClick={() => setReplyTo(null)}
                       >

@@ -20,6 +20,7 @@ export class RecordingEngine {
   pointers: { time: number; x: number; y: number }[] = [];
   onFailure: (message: string) => void = () => {};
   stopPromise?: Promise<Draft | undefined>;
+  release: () => void = () => {};
   constructor(capture: CaptureSession) {
     this.capture = capture;
   }
@@ -33,6 +34,13 @@ export class RecordingEngine {
     const roles = Object.keys(this.capture.tracks) as TrackRole[];
     const draft = await createDraft({ roles, layout, excluded: [] });
     this.id = draft.id;
+    // Held for the life of the take so other tabs know it is still recording.
+    void navigator.locks
+      ?.request(
+        `relay-rec-${draft.id}`,
+        () => new Promise<void>((r) => (this.release = r)),
+      )
+      .catch(() => {});
     for (const role of roles) {
       const stream = this.capture.tracks[role]!;
       const audioOnly = !stream.getVideoTracks().length;
@@ -112,9 +120,9 @@ export class RecordingEngine {
     );
   }
   point(point: { x: number; y: number }) {
-    if (this.stopped || this.paused || this.pointers.length >= 5000) return;
+    if (this.stopped || this.paused || this.pointers.length >= 20000) return;
     const time = this.seconds();
-    if (!this.pointers.length || time - this.pointers.at(-1)!.time >= 0.35)
+    if (!this.pointers.length || time - this.pointers.at(-1)!.time >= 0.14)
       this.pointers.push({ ...point, time });
   }
   stop(): Promise<Draft | undefined> {
@@ -136,6 +144,7 @@ export class RecordingEngine {
       ),
     );
     const writes = await Promise.allSettled(this.writes);
+    this.release();
     this.capture.cleanup();
     const d = (await getDraft(this.id))!;
     return updateDraft(this.id, {

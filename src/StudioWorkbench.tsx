@@ -47,7 +47,7 @@ export function StudioWorkbench({
     [tab, setTab] = useState("edit"),
     [videos, setVideos] = useState<Clip[]>([]),
     [addId, setAddId] = useState(""),
-    [selected, setSelected] = useState(0),
+    [selectedRaw, setSelected] = useState(0),
     [cutStart, setCutStart] = useState(0),
     [cutEnd, setCutEnd] = useState(1),
     [error, setError] = useState(""),
@@ -157,6 +157,11 @@ export function StudioWorkbench({
         }
       }
     });
+  // Undo can shrink the section list under the selection; never index past it.
+  const selected = Math.max(
+    0,
+    Math.min(selectedRaw, (project?.segments.length ?? 1) - 1),
+  );
   const history = async (direction: "undo" | "redo") => {
     if (!project) return;
     const from = direction === "undo" ? undo : redo,
@@ -944,23 +949,38 @@ export function StudioWorkbench({
           </div>
           <div className="section-heading studio-section-title">
             <h3>Focus, explain, or redact.</h3>
-            <button
-              className="text-button small"
-              onClick={() =>
-                void action("Finding focus points", async () => {
-                  const effects = await api<Project["overlays"]>(
-                    `/api/videos/${clip.id}/focus-suggestions`,
-                  );
-                  edit((p) => p.overlays.push(...effects));
-                  if (!effects.length)
-                    notify(
-                      "No desktop pointer samples were available. Add a zoom manually.",
+            <div className="actions">
+              {project.overlays.some((o) => o.auto) && (
+                <button
+                  className="text-button small"
+                  onClick={() =>
+                    edit(
+                      (p) => (p.overlays = p.overlays.filter((o) => !o.auto)),
+                    )
+                  }
+                >
+                  Remove auto-zooms
+                </button>
+              )}
+              <button
+                className="text-button small"
+                onClick={() =>
+                  void action("Finding key moments", async () => {
+                    const effects = await api<Project["overlays"]>(
+                      `/api/videos/${clip.id}/focus-suggestions`,
                     );
-                })
-              }
-            >
-              Suggest focus zooms
-            </button>
+                    edit((p) => p.overlays.push(...effects));
+                    notify(
+                      effects.length
+                        ? `Added ${effects.length} zoom${effects.length === 1 ? "" : "s"} where you paused to point.`
+                        : "No new key moments found. Pointer data comes from Mac app recordings; add a zoom by hand.",
+                    );
+                  })
+                }
+              >
+                Auto-zoom key moments
+              </button>
+            </div>
           </div>
           <div className="effect-add">
             {(["text", "arrow", "box", "blur", "zoom", "cursor"] as const).map(
@@ -994,7 +1014,10 @@ export function StudioWorkbench({
           </div>
           {project.overlays.map((o, i) => (
             <div className="effect-row" key={o.id}>
-              <strong>{o.type}</strong>
+              <strong>
+                {o.type}
+                {o.auto && <small className="muted"> · auto</small>}
+              </strong>
               {o.type === "text" && (
                 <input
                   aria-label={`Effect text ${i + 1}`}

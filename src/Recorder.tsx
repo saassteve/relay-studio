@@ -26,6 +26,8 @@ import {
   type Draft,
 } from "./drafts";
 import { cachedPreferences, pref, savePreferences } from "./prefs";
+import { CameraLookPicker } from "./CameraLook";
+import type { CameraLook } from "./cameraEffects";
 
 export function Recorder({
   onClose,
@@ -55,6 +57,11 @@ export function Recorder({
       pref("afterRecording") === "copy-link",
     ),
     [count, setCount] = useState<number | null>(null),
+    [look, setLookState] = useState<CameraLook>({
+      filter: pref("cameraFilter"),
+      background: pref("cameraBackground"),
+    }),
+    [autoZoom, setAutoZoomState] = useState<boolean>(pref("autoZoom")),
     [notes, setNotes] = useState(""),
     [meter, setMeter] = useState(0),
     [crop, setCrop] = useState(false),
@@ -80,6 +87,17 @@ export function Recorder({
     setCameraId = (v: string) => {
       setCameraIdState(v);
       void savePreferences({ cameraId: v });
+    },
+    setLook = (v: CameraLook) => {
+      setLookState(v);
+      void savePreferences({
+        cameraFilter: v.filter,
+        cameraBackground: v.background,
+      });
+    },
+    setAutoZoom = (v: boolean) => {
+      setAutoZoomState(v);
+      void savePreferences({ autoZoom: v });
     },
     setSystemAudio = (v: boolean) => {
       setSystemAudioState(v);
@@ -134,7 +152,10 @@ export function Recorder({
       });
     };
   }, []);
+  const finishing = useRef(false);
   const finish = async () => {
+    if (finishing.current) return;
+    finishing.current = true;
     try {
       setPhase("preparing");
       // Read the on-screen bubble position before the native surfaces close.
@@ -142,14 +163,19 @@ export function Recorder({
         ?.cameraLayout?.()
         .catch(() => null);
       let d = await engine.current?.stop();
-      if (d && camera)
+      if (d)
         d = await updateDraft(d.id, {
           meta: {
             ...d.meta,
-            layout: {
-              ...(d.meta.layout || {}),
-              camera,
-            } as Draft["meta"]["layout"],
+            autoZoom: pref("autoZoom") && Boolean(d.meta.pointers?.length),
+            ...(camera
+              ? {
+                  layout: {
+                    ...(d.meta.layout || {}),
+                    camera,
+                  } as Draft["meta"]["layout"],
+                }
+              : {}),
           },
         });
       clearInterval(tick.current);
@@ -220,6 +246,7 @@ export function Recorder({
         cameraId,
         systemAudio,
         region: selectedRegion,
+        look,
       });
       capture.current = session;
       if (!mounted.current) {
@@ -241,6 +268,8 @@ export function Recorder({
                 bubble: mode === "screen-camera" && pref("bubble"),
                 bubbleSize: pref("bubbleSize"),
                 cameraId,
+                filter: look.filter,
+                background: look.background,
               })
             ).cancelled
           : seconds
@@ -252,6 +281,7 @@ export function Recorder({
         if (mounted.current) setPhase("setup");
         return;
       }
+      finishing.current = false;
       const recording = new RecordingEngine(session);
       engine.current = recording;
       recording.onFailure = (message) => {
@@ -265,13 +295,9 @@ export function Recorder({
         setSeconds(seconds);
         setMeter(session.level());
         if (recording.stopped && mounted.current) {
+          // Ended from outside (for example "Stop sharing"): finish the same way.
           clearInterval(tick.current);
-          void recording.stop().then((d) => {
-            if (d) {
-              setDraft(d);
-              setPhase("review");
-            }
-          });
+          void finish();
         }
         window.relayDesktop?.captureState?.({
           active: !recording.stopped,
@@ -282,6 +308,19 @@ export function Recorder({
       }, 200);
     } catch (e) {
       capture.current?.cleanup();
+      // Undo a half-started take: no stray draft, and no hidden window or bubble.
+      const failed = engine.current;
+      engine.current = null;
+      if (failed?.id) {
+        await failed.stop().catch(() => undefined);
+        await discardDraft(failed.id).catch(() => {});
+      }
+      window.relayDesktop?.captureState?.({
+        active: false,
+        paused: false,
+        seconds: 0,
+        notes: "",
+      });
       setError((e as Error).message);
       setPhase("setup");
     }
@@ -420,7 +459,9 @@ export function Recorder({
                 <i className={phase === "paused" ? "paused" : ""} />
                 {phase === "paused" ? "Paused" : "Recording"}{" "}
                 <b>{clock(seconds)}</b>
-                <span className={`audio-meter ${meter > 0.92 ? "is-loud" : ""}`}>
+                <span
+                  className={`audio-meter ${meter > 0.92 ? "is-loud" : ""}`}
+                >
                   <i style={{ width: `${meter * 100}%` }} />
                 </span>
               </div>
@@ -582,10 +623,36 @@ export function Recorder({
                 >
                   Test microphone
                 </button>
-                <span className={`audio-meter ${meter > 0.92 ? "is-loud" : ""}`}>
+                <span
+                  className={`audio-meter ${meter > 0.92 ? "is-loud" : ""}`}
+                >
                   <i style={{ width: `${meter * 100}%` }} />
                 </span>
               </div>
+              {mode !== "screen" && (
+                <div className="field small">
+                  Camera look
+                  <CameraLookPicker
+                    cameraId={cameraId}
+                    look={look}
+                    onChange={setLook}
+                    size={112}
+                  />
+                </div>
+              )}
+              {window.relayDesktop && mode !== "camera" && (
+                <label className="check-label">
+                  <input
+                    type="checkbox"
+                    checked={autoZoom}
+                    onChange={(e) => setAutoZoom(e.target.checked)}
+                  />
+                  Auto-zoom into key moments
+                  <span className="small muted">
+                    · follows where you point, editable after
+                  </span>
+                </label>
+              )}
               <label className="field small">
                 Speaker notes
                 <textarea
@@ -684,8 +751,12 @@ export function Recorder({
                     className="btn"
                     disabled={phase === "saving"}
                     onClick={async () => {
-                      if (draft) await discardDraft(draft.id);
-                      onClose();
+                      try {
+                        if (draft) await discardDraft(draft.id);
+                        onClose();
+                      } catch (e) {
+                        setError((e as Error).message);
+                      }
                     }}
                   >
                     Discard

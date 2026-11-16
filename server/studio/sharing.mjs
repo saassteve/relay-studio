@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import path from "node:path";
 import { existsSync } from "node:fs";
-import { parseJSON, problem } from "./schema.mjs";
+import { parseJSON, problem, mediaHeaders } from "./schema.mjs";
 import { passwordHash, passwordMatches } from "./auth.mjs";
 import {
   captions,
@@ -192,7 +192,7 @@ export function registerSharing({
       c = guard(req, v);
     if (req.query.download && c.download === false)
       throw problem(403, "The owner has disabled downloads.");
-    res.set({ "Content-Type": v.mime, "Cache-Control": "private, no-store" });
+    mediaHeaders(res, v.mime);
     if (req.query.download)
       res.attachment(
         `relay-${v.id}.${v.mime === "video/webm" ? "webm" : "mp4"}`,
@@ -404,15 +404,14 @@ export function registerSharing({
   });
   app.patch("/api/videos/:id/comments/:commentId", owner, (req, res) => {
     const v = find(req.params.id);
-    const row=db.prepare('SELECT id,parent_id FROM comments WHERE id=? AND video_id=?').get(req.params.commentId,v.id);
-    if(!row)throw problem(404,'This thread was not found.');
-    const root=row.parent_id||row.id;
-    db.prepare("UPDATE comments SET resolved=? WHERE (id=? OR parent_id=?) AND video_id=?").run(
-      Number(Boolean(req.body.resolved)),
-      root,
-      root,
-      v.id,
-    );
+    const row = db
+      .prepare("SELECT id,parent_id FROM comments WHERE id=? AND video_id=?")
+      .get(req.params.commentId, v.id);
+    if (!row) throw problem(404, "This thread was not found.");
+    const root = row.parent_id || row.id;
+    db.prepare(
+      "UPDATE comments SET resolved=? WHERE (id=? OR parent_id=?) AND video_id=?",
+    ).run(Number(Boolean(req.body.resolved)), root, root, v.id);
     res.json(serialize(v));
   });
   app.delete("/api/videos/:id/comments/:commentId", owner, (req, res) => {

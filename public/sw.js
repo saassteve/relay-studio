@@ -1,4 +1,4 @@
-const VERSION='relay-shell-v2';
+const VERSION='relay-shell-__BUILD__';
 self.addEventListener('install',event=>event.waitUntil((async()=>{
  const cache=await caches.open(VERSION),response=await fetch('/'),html=await response.text();
  await cache.put('/',new Response(html,{headers:{'Content-Type':'text/html'}}));

@@ -19,7 +19,9 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font: 700 21px "Manrope", sans-serif;
+  font:
+    700 21px "Manrope",
+    sans-serif;
   letter-spacing: -0.8px;
   color: var(--lime);
 }
@@ -118,7 +120,9 @@
   max-width: 540px;
 }
 .lede kbd {
-  font: 600 12px "DM Sans", sans-serif;
+  font:
+    600 12px "DM Sans",
+    sans-serif;
   padding: 2px 7px;
   margin: 0 2px;
   border-radius: 5px;
@@ -276,13 +280,13 @@
 }
 .check-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 18px;
   margin-top: 28px;
 }
 .check-camera,
 .check-mic {
-  padding: 22px;
+  padding: 20px 22px;
   border: 1px solid var(--border);
   border-radius: 14px;
   background: #fffffb;
@@ -326,7 +330,7 @@
   text-align: center;
 }
 .level-bars {
-  height: 168px;
+  height: 92px;
   width: 100%;
   display: flex;
   align-items: center;
@@ -457,7 +461,9 @@
   gap: 6px;
 }
 .shortcut-card kbd {
-  font: 600 11px "DM Sans", sans-serif;
+  font:
+    600 11px "DM Sans",
+    sans-serif;
   padding: 3px 6px;
   border-radius: 5px;
   background: #fff;
@@ -528,13 +534,17 @@
   place-items: center;
   background: #0a251bcc;
   color: var(--lime);
-  font: 700 96px/1 "Manrope", sans-serif;
+  font:
+    700 96px/1 "Manrope",
+    sans-serif;
   z-index: 3;
   cursor: pointer;
 }
 .recorder-countdown small {
   display: block;
-  font: 500 12px "DM Sans", sans-serif;
+  font:
+    500 12px "DM Sans",
+    sans-serif;
   color: #c3d1c6;
   margin-top: 12px;
   text-align: center;
@@ -592,4 +602,7 @@
   .ready-burst span {
     animation: none;
   }
+}
+.check-camera {
+  align-items: stretch;
 }

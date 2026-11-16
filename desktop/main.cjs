@@ -13,7 +13,6 @@ const {
   nativeImage,
   dialog,
 } = require("electron");
-const { pathToFileURL } = require("node:url");
 const { spawn } = require("node:child_process");
 const path = require("node:path");
 const fs = require("node:fs");
@@ -33,10 +32,10 @@ const RECORDING_SHORTCUTS = {
   "Alt+Shift+D": "draw",
 };
 app.setName("Relay");
-if (!app.requestSingleInstanceLock()) app.quit();
+if (!app.requestSingleInstanceLock()) app.exit(0);
+const localSecret = require("node:crypto").randomBytes(32).toString("hex");
 app.on("second-instance", () => {
-  mainWindow?.show();
-  mainWindow?.focus();
+  if (baseURL) showStudio();
 });
 async function startServer() {
   const ffmpeg = await require("./engine.cjs")();
@@ -53,6 +52,7 @@ async function startServer() {
       NODE_ENV: "production",
       RELAY_DATA_DIR: data,
       RELAY_PORT: STABLE_PORT,
+      RELAY_LOCAL_SECRET: localSecret,
       ...(ffmpeg ? { FFMPEG_BIN: ffmpeg } : {}),
       PUBLIC_URL: "",
     },
@@ -84,10 +84,12 @@ async function startServer() {
     });
   });
 }
-const bubblePage = pathToFileURL(path.join(__dirname, "bubble.html")).href;
 const isBubble = (webContents) => {
   try {
-    return webContents.getURL().split("?")[0] === bubblePage;
+    return (
+      Boolean(baseURL) &&
+      webContents.getURL().split("?")[0] === `${baseURL}/bubble.html`
+    );
   } catch {
     return false;
   }
@@ -143,8 +145,27 @@ async function createWindow() {
       if (/^https?:/.test(url)) void shell.openExternal(url);
     }
   });
-  await mainWindow.loadURL(baseURL);
-  mainWindow.on("closed", () => (mainWindow = null));
+  const win = mainWindow;
+  // If the studio goes away mid-recording, end the native recording state so
+  // the controls, shortcuts and tray don't get stuck.
+  const reset = () => nativeStudio?.reset();
+  win.on("closed", () => {
+    if (mainWindow === win) mainWindow = null;
+    reset();
+  });
+  win.webContents.on("render-process-gone", reset);
+  win.webContents.on("did-start-navigation", (e, url, inPlace, isMainFrame) => {
+    if (isMainFrame && !inPlace) reset();
+  });
+  if (!process.env.RELAY_SERVER_URL)
+    await session.defaultSession.cookies.set({
+      url: baseURL,
+      name: "relay_local",
+      value: localSecret,
+      httpOnly: true,
+      sameSite: "strict",
+    });
+  await win.loadURL(baseURL);
 }
 app
   .whenReady()
@@ -291,8 +312,8 @@ app
       window: () => mainWindow,
       captureBounds: () => selectedBounds,
       onAction(action) {
-        if (action === "cancel") return void confirmDiscard(), true;
-        if (action === "draw") return toggleDraw(), true;
+        if (action === "cancel") return (void confirmDiscard(), true);
+        if (action === "draw") return (toggleDraw(), true);
         return false;
       },
       onActive(active) {
@@ -319,6 +340,7 @@ app
     captureUI = require("./capture-ui.cjs")({
       captureBounds: () => selectedBounds,
       region: () => nativeStudio.region(),
+      baseURL: () => baseURL,
     });
     ipcMain.handle("relay:info", (event) => {
       if (!trusted(event)) throw new Error("Untrusted request");
@@ -342,7 +364,10 @@ app
         // Asking for sources registers Relay in the Screen Recording list and,
         // on first use, shows the macOS prompt.
         await desktopCapturer
-          .getSources({ types: ["screen"], thumbnailSize: { width: 1, height: 1 } })
+          .getSources({
+            types: ["screen"],
+            thumbnailSize: { width: 1, height: 1 },
+          })
           .catch(() => []);
         return systemPreferences.getMediaAccessStatus("screen");
       }
@@ -385,6 +410,8 @@ app
             ? {
                 deviceId: String(options.cameraId || ""),
                 size: options.bubbleSize,
+                filter: options.filter,
+                background: options.background,
               }
             : null,
         draw: screenCapture && Boolean(selectedBounds),
@@ -401,10 +428,18 @@ app
       return captureUI.cameraLayout();
     });
     await createWindow();
+    const whenStudioReady = async (channel, ...args) => {
+      if (!mainWindow) {
+        await createWindow();
+        // Give the freshly loaded studio a moment to start listening.
+        await new Promise((r) => setTimeout(r, 900));
+      }
+      showStudio();
+      mainWindow?.webContents.send(channel, ...args);
+    };
     const startRecording = async () => {
       if (nativeStudio.state().active) return nativeStudio.send("stop");
-      showStudio();
-      mainWindow?.webContents.send("relay:record");
+      await whenStudioReady("relay:record");
     };
     const trayIcon = (recording) => {
       const image = nativeImage.createFromPath(
@@ -422,7 +457,9 @@ app
       const n = Math.floor(state.seconds || 0);
       const time = `${Math.floor(n / 60)}:${String(n % 60).padStart(2, "0")}`;
       if (process.platform === "darwin")
-        tray.setTitle(state.active ? ` ${time}` : "", { fontType: "monospacedDigit" });
+        tray.setTitle(state.active ? ` ${time}` : "", {
+          fontType: "monospacedDigit",
+        });
       const key = `${!!state.active}:${!!state.paused}`;
       if (key === trayKey) return;
       trayKey = key;
@@ -439,7 +476,7 @@ app
                 },
                 {
                   label: "Finish recording",
-                  accelerator: "CommandOrControl+Shift+R",
+                  accelerator: "Alt+Shift+R",
                   click: () => nativeStudio.send("stop"),
                 },
                 {
@@ -453,7 +490,7 @@ app
             : [
                 {
                   label: "New recording",
-                  accelerator: "CommandOrControl+Shift+R",
+                  accelerator: "Alt+Shift+R",
                   click: startRecording,
                 },
                 { label: "Open library", click: showStudio },
@@ -465,7 +502,8 @@ app
     }
     tray = new Tray(trayIcon(false));
     updateTray();
-    globalShortcut.register("CommandOrControl+Shift+R", startRecording);
+    if (!globalShortcut.register("Alt+Shift+R", startRecording))
+      console.warn("The ⌥⇧R shortcut is in use by another app.");
     const template = [
       ...(process.platform === "darwin" ? [{ role: "appMenu" }] : []),
       {
@@ -473,15 +511,12 @@ app
         submenu: [
           {
             label: "New recording",
-            accelerator: "CommandOrControl+Shift+R",
+            accelerator: "Alt+Shift+R",
             click: startRecording,
           },
           {
             label: "Setup guide",
-            click: () => {
-              showStudio();
-              mainWindow?.webContents.send("relay:control", "onboarding");
-            },
+            click: () => void whenStudioReady("relay:control", "onboarding"),
           },
           { type: "separator" },
           { role: process.platform === "darwin" ? "close" : "quit" },

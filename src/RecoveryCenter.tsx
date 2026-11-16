@@ -61,8 +61,14 @@ export function RecoveryCenter({
   useEffect(() => {
     let alive = true;
     void listDrafts().then(async (items) => {
+      // A take still being recorded in another tab or window holds a lock.
+      const live = new Set(
+        (await navigator.locks?.query().catch(() => null))?.held?.map(
+          (l) => l.name,
+        ) || [],
+      );
       for (const d of items)
-        if (d.status === "recording")
+        if (d.status === "recording" && !live.has(`relay-rec-${d.id}`))
           await updateDraft(d.id, { status: "review" });
       if (alive) void load();
     });
@@ -151,7 +157,7 @@ export function RecoveryCenter({
                   )}
                   Recover
                 </button>
-                {d.status !== "processing" && (
+                {(d.status !== "processing" || d.error) && (
                   <button
                     className="icon-button danger"
                     aria-label={`Discard ${d.title}`}

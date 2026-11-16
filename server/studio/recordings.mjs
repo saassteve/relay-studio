@@ -17,8 +17,9 @@ import path from "node:path";
 import ffmpeg from "../ffmpeg.mjs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { parseJSON, problem } from "./schema.mjs";
-import { initialProject, cutRanges } from "./project.mjs";
+import { parseJSON, problem, safeMime } from "./schema.mjs";
+import { autoZoom } from "./autozoom.mjs";
+import { initialProject, cutRanges, validateProject } from "./project.mjs";
 const run = promisify(execFile);
 const roles = ["screen", "camera", "microphone", "system"];
 const isId = (id) => /^[a-f0-9-]{36}$/.test(id);
@@ -134,6 +135,8 @@ export function registerRecordings({
         0,
         100,
       );
+      if (safeMime(mime) === "application/octet-stream")
+        throw problem(415, "Unsupported track type.");
       db.prepare("INSERT INTO recording_parts VALUES(?,?,?,?,?,?)").run(
         row.id,
         role,
@@ -210,128 +213,148 @@ export function registerRecordings({
     const meta = parseJSON(row.meta, {}),
       trackRows = db
         .prepare(
-          "SELECT DISTINCT role,mime FROM recording_parts WHERE recording_id=?",
+          "SELECT role,MIN(mime) AS mime FROM recording_parts WHERE recording_id=? GROUP BY role",
         )
         .all(row.id),
       videoId = randomUUID(),
-      assets = [];
-    for (let i = 0; i < trackRows.length; i++) {
-      const track = trackRows[i],
-        parts = db
-          .prepare(
-            "SELECT * FROM recording_parts WHERE recording_id=? AND role=? ORDER BY seq",
-          )
-          .all(row.id, track.role);
-      for (let j = 0; j < parts.length; j++)
-        if (parts[j].seq !== j)
-          throw problem(
-            409,
-            `The ${track.role} track has a missing chunk. Reconnect and retry.`,
-          );
-      const joined = path.join(root, row.id, `${track.role}.stream`),
-        stream = createWriteStream(joined);
-      for (const p of parts) {
-        const file = path.join(
-          root,
-          row.id,
-          track.role,
-          String(p.seq).padStart(8, "0"),
-        );
-        for await (const data of createReadStream(file))
-          if (!stream.write(data))
-            await new Promise((r) => stream.once("drain", r));
-      }
-      stream.end();
-      await finished(stream);
-      const ext = track.mime.includes("mp4") ? "mp4" : "webm",
-        filename = `${videoId}-${track.role}.${ext}`,
-        target = path.join(dataDir, "media", filename);
-      await run(
-        ffmpeg,
-        [
-          "-hide_banner",
-          "-loglevel",
-          "error",
-          "-nostdin",
-          "-y",
-          "-i",
-          joined,
-          "-c",
-          "copy",
-          ...(ext === "mp4" ? ["-movflags", "+faststart"] : []),
-          target,
-        ],
-        { timeout: 600000, maxBuffer: 1024 * 1024 },
-      );
-      const info = await renderer.info({
-        video_id: videoId,
-        role: track.role,
-        filename,
-        info: "{}",
-      });
-      assets.push({
-        role: track.role,
-        filename,
-        mime: track.mime,
-        duration: info.duration || row.duration,
-        info,
-      });
-      progress(5 + ((i + 1) / trackRows.length) * 15);
-    }
-    const primary =
-      assets.find((a) => a.role === "screen") ||
-      assets.find((a) => a.role === "camera");
-    db.prepare(
-      "INSERT INTO videos(id,title,duration,size,mime,filename,created) VALUES(?,?,?,?,?,?,?)",
-    ).run(
-      videoId,
-      row.title,
-      row.duration,
-      statSync(path.join(dataDir, "media", primary.filename)).size,
-      "video/webm",
-      primary.filename,
-      new Date().toISOString(),
-    );
-    for (const asset of assets)
-      db.prepare("INSERT INTO assets VALUES(?,?,?,?,?,?)").run(
-        videoId,
-        asset.role,
-        asset.filename,
-        asset.mime,
-        asset.duration,
-        JSON.stringify(asset.info),
-      );
-    let project = initialProject(find(videoId));
-    const sourceWidth = primary.info.width || 1280,
-      sourceHeight = primary.info.height || 720,
-      scale = Math.min(1, 3840 / sourceWidth, 2160 / sourceHeight);
-    project.layout.width = Math.max(
-      320,
-      Math.round((sourceWidth * scale) / 2) * 2,
-    );
-    project.layout.height = Math.max(
-      180,
-      Math.round((sourceHeight * scale) / 2) * 2,
-    );
-    if (meta.layout)
-      project.layout = {
-        ...project.layout,
-        ...meta.layout,
-        camera: { ...project.layout.camera, ...meta.layout.camera },
-        audio: { ...project.layout.audio, ...meta.layout.audio },
-      };
-    for (const range of meta.excluded || []) {
-      if (
-        Number.isFinite(range.start) &&
-        Number.isFinite(range.end) &&
-        range.start >= 0 &&
-        range.end <= row.duration
-      )
-        project = cutRanges(project, videoId, [range]);
-    }
-    const filename = `${videoId}-r1.mp4`,
+      assets = [],
+      created = [],
+      filename = `${videoId}-r1.mp4`,
       destination = path.join(dataDir, "media", filename);
+    // Everything from the first remux on is undone together if any step fails,
+    // so a retry never leaves an orphaned video behind.
     try {
+      for (let i = 0; i < trackRows.length; i++) {
+        const track = trackRows[i],
+          parts = db
+            .prepare(
+              "SELECT * FROM recording_parts WHERE recording_id=? AND role=? ORDER BY seq",
+            )
+            .all(row.id, track.role);
+        for (let j = 0; j < parts.length; j++)
+          if (parts[j].seq !== j)
+            throw problem(
+              409,
+              `The ${track.role} track has a missing chunk. Reconnect and retry.`,
+            );
+        const joined = path.join(root, row.id, `${track.role}.stream`),
+          stream = createWriteStream(joined);
+        for (const p of parts) {
+          const file = path.join(
+            root,
+            row.id,
+            track.role,
+            String(p.seq).padStart(8, "0"),
+          );
+          for await (const data of createReadStream(file))
+            if (!stream.write(data))
+              await new Promise((r) => stream.once("drain", r));
+        }
+        stream.end();
+        await finished(stream);
+        const ext = track.mime.includes("mp4") ? "mp4" : "webm",
+          trackFile = `${videoId}-${track.role}.${ext}`,
+          target = path.join(dataDir, "media", trackFile);
+        created.push(trackFile);
+        await run(
+          ffmpeg,
+          [
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-y",
+            // Name the container explicitly rather than trusting the bytes.
+            "-f",
+            ext === "mp4" ? "mov" : "matroska",
+            "-i",
+            joined,
+            "-c",
+            "copy",
+            ...(ext === "mp4" ? ["-movflags", "+faststart"] : []),
+            target,
+          ],
+          { timeout: 600000, maxBuffer: 1024 * 1024 },
+        );
+        const info = await renderer.info({
+          video_id: videoId,
+          role: track.role,
+          filename: trackFile,
+          info: "{}",
+        });
+        assets.push({
+          role: track.role,
+          filename: trackFile,
+          mime: safeMime(track.mime),
+          duration: info.duration || row.duration,
+          info,
+        });
+        progress(5 + ((i + 1) / trackRows.length) * 15);
+      }
+      const primary =
+        assets.find((a) => a.role === "screen") ||
+        assets.find((a) => a.role === "camera");
+      db.prepare(
+        "INSERT INTO videos(id,title,duration,size,mime,filename,created) VALUES(?,?,?,?,?,?,?)",
+      ).run(
+        videoId,
+        row.title,
+        row.duration,
+        statSync(path.join(dataDir, "media", primary.filename)).size,
+        "video/webm",
+        primary.filename,
+        new Date().toISOString(),
+      );
+      for (const asset of assets)
+        db.prepare("INSERT INTO assets VALUES(?,?,?,?,?,?)").run(
+          videoId,
+          asset.role,
+          asset.filename,
+          asset.mime,
+          asset.duration,
+          JSON.stringify(asset.info),
+        );
+      let project = initialProject(find(videoId));
+      const sourceWidth = primary.info.width || 1280,
+        sourceHeight = primary.info.height || 720,
+        scale = Math.min(1, 3840 / sourceWidth, 2160 / sourceHeight);
+      project.layout.width = Math.max(
+        320,
+        Math.round((sourceWidth * scale) / 2) * 2,
+      );
+      project.layout.height = Math.max(
+        180,
+        Math.round((sourceHeight * scale) / 2) * 2,
+      );
+      if (meta.layout)
+        project.layout = {
+          ...project.layout,
+          ...meta.layout,
+          camera: { ...project.layout.camera, ...meta.layout.camera },
+          audio: { ...project.layout.audio, ...meta.layout.audio },
+        };
+      for (const range of meta.excluded || []) {
+        if (
+          Number.isFinite(range.start) &&
+          Number.isFinite(range.end) &&
+          range.start >= 0 &&
+          range.end <= row.duration
+        )
+          project = cutRanges(project, videoId, [range]);
+      }
+      // Desktop recordings zoom into key moments automatically. Each zoom is an
+      // ordinary, removable effect in the project.
+      if (meta.autoZoom && Array.isArray(meta.pointers) && meta.pointers.length)
+        project.overlays = [
+          ...(project.overlays || []),
+          ...autoZoom(meta.pointers, {
+            segments: project.segments,
+            sourceId: videoId,
+            duration: row.duration,
+          }),
+        ].slice(0, 60);
+      // Client-supplied layout reaches the render, so it is always validated.
+      project = validateProject(project, find);
       const rendered = await renderer.render(
         find(videoId),
         project,
@@ -366,9 +389,10 @@ export function registerRecordings({
       );
       return { videoId };
     } catch (e) {
+      db.prepare("DELETE FROM assets WHERE video_id=?").run(videoId);
       db.prepare("DELETE FROM videos WHERE id=?").run(videoId);
-      for (const asset of assets)
-        rmSync(path.join(dataDir, "media", asset.filename), { force: true });
+      for (const file of created)
+        rmSync(path.join(dataDir, "media", file), { force: true });
       rmSync(destination, { force: true });
       throw e;
     }

@@ -1,3 +1,12 @@
+import { zoomFilter } from "./autozoom.mjs";
+import { existsSync as exists } from "node:fs";
+import { fileURLToPath } from "node:url";
+// Fonts ship in public/ from source and in dist/ in production images.
+const appRoot = fileURLToPath(new URL("../..", import.meta.url));
+const fontsDir =
+  ["public/fonts", "dist/fonts"]
+    .map((p) => path.join(appRoot, p))
+    .find((p) => exists(p)) || path.join(appRoot, "public/fonts");
 import ffmpeg from "../ffmpeg.mjs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -80,6 +89,7 @@ export function createRenderer({ db, dataDir, find }) {
       color = l.background.replace("#", "0x");
     try {
       const parts = [];
+      let offset = 0;
       for (let n = 0; n < project.segments.length; n++) {
         const s = project.segments[n],
           source = find(s.sourceId),
@@ -126,7 +136,14 @@ export function createRenderer({ db, dataDir, find }) {
           l.audio.microphone > 0
         )
           audio.push({ index: pi, gain: l.audio.microphone });
-        let filter = `[${pi}:v]setpts=PTS-STARTPTS,scale=${innerW}:${innerH}:force_original_aspect_ratio=decrease,pad=${innerW}:${innerH}:(ow-iw)/2:(oh-ih)/2:color=${color},setsar=1,fps=30,tpad=stop_mode=clone:stop_duration=${d},trim=duration=${d}[screen];color=c=${color}:s=${W}x${H}:r=30:d=${d}[background];[background][screen]overlay=${pad}:${pad}:shortest=1[base]`;
+        // Zooms act on the screen layer only, so the camera bubble stays put.
+        const zooms = (project.overlays || [])
+          .filter((o) => o.type === "zoom")
+          .map((o) => ({ ...o, start: o.start - offset, end: o.end - offset }))
+          .filter((o) => o.end > 0 && o.start < d);
+        const zoom = zoomFilter(zooms, innerW, innerH);
+        offset += d;
+        let filter = `[${pi}:v]setpts=PTS-STARTPTS,scale=${innerW}:${innerH}:force_original_aspect_ratio=decrease,pad=${innerW}:${innerH}:(ow-iw)/2:(oh-ih)/2:color=${color},setsar=1,fps=30,tpad=stop_mode=clone:stop_duration=${d},trim=duration=${d}${zoom ? `,${zoom}` : ""}[screen];color=c=${color}:s=${W}x${H}:r=30:d=${d}[background];[background][screen]overlay=${pad}:${pad}:shortest=1[base]`;
         let visual = "base";
         if (camera !== null) {
           const cw = Math.max(32, Math.round((W * l.camera.size) / 2) * 2),
@@ -154,7 +171,7 @@ export function createRenderer({ db, dataDir, find }) {
         const target = path.join(temp, `segment-${n}.mp4`);
         args.push(
           "-filter_complex",
-          readFileSync(script,'utf8'),
+          readFileSync(script, "utf8"),
           "-map",
           `[${visual}]`,
           "-map",
@@ -220,9 +237,11 @@ export function createRenderer({ db, dataDir, find }) {
         counter = 0;
       const next = () => `v${counter++}`;
       const font = path.resolve(
-        "public/fonts/rP2tp2ywxg089UriI5-g4vlH9VoD8CmcqZG40F9JadbnoEwARZthTg.ttf",
+        fontsDir,
+        "rP2tp2ywxg089UriI5-g4vlH9VoD8CmcqZG40F9JadbnoEwARZthTg.ttf",
       );
       for (const effect of effects) {
+        if (effect.type === "zoom") continue;
         const target = next(),
           x = Math.round(effect.x * W),
           y = Math.round(effect.y * H),
@@ -232,18 +251,8 @@ export function createRenderer({ db, dataDir, find }) {
         if (effect.type === "blur") {
           vf.push(
             `[${previous}]split[base${counter}][blur${counter}]`,
-            `[blur${counter}]crop=${w}:${h}:${x}:${y},boxblur=lr=${Math.max(1,Math.min(16,Math.floor(Math.min(w,h)/4)))}:lp=2:cr=${Math.max(1,Math.min(8,Math.floor(Math.min(w,h)/8)))}:cp=2[blurred${counter}]`,
+            `[blur${counter}]crop=${w}:${h}:${x}:${y},boxblur=lr=${Math.max(1, Math.min(16, Math.floor(Math.min(w, h) / 4)))}:lp=2:cr=${Math.max(1, Math.min(8, Math.floor(Math.min(w, h) / 8)))}:cp=2[blurred${counter}]`,
             `[base${counter}][blurred${counter}]overlay=${x}:${y}:enable='${enable}'[${target}]`,
-          );
-        } else if (effect.type === "zoom") {
-          const zw = Math.round(W / effect.scale / 2) * 2,
-            zh = Math.round(H / effect.scale / 2) * 2,
-            zx = Math.min(W - zw, Math.max(0, x - zw / 2)),
-            zy = Math.min(H - zh, Math.max(0, y - zh / 2));
-          vf.push(
-            `[${previous}]split[base${counter}][zoom${counter}]`,
-            `[zoom${counter}]crop=${zw}:${zh}:${zx}:${zy},scale=${W}:${H}[zoomed${counter}]`,
-            `[base${counter}][zoomed${counter}]overlay=0:0:enable='${enable}'[${target}]`,
           );
         } else if (effect.type === "box")
           vf.push(
@@ -272,7 +281,7 @@ export function createRenderer({ db, dataDir, find }) {
           writeFileSync(file, captions(words, "srt"));
           const target = next();
           vf.push(
-            `[${previous}]subtitles=filename='${filterPath(file)}':fontsdir='${filterPath(path.resolve("public/fonts"))}':force_style='FontName=DM Sans,FontSize=22,Outline=2,MarginV=30'[${target}]`,
+            `[${previous}]subtitles=filename='${filterPath(file)}':fontsdir='${filterPath(fontsDir)}':force_style='FontName=DM Sans,FontSize=22,Outline=2,MarginV=30'[${target}]`,
           );
           previous = target;
         }
@@ -291,7 +300,7 @@ export function createRenderer({ db, dataDir, find }) {
             "-i",
             combined,
             "-filter_complex",
-            readFileSync(script,'utf8'),
+            readFileSync(script, "utf8"),
             "-map",
             `[${previous}]`,
             "-map",

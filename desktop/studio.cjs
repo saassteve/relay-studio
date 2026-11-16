@@ -82,7 +82,9 @@ module.exports = function attachStudio({
       notes: String(value.notes || "").slice(0, 10000),
     };
     onState(state);
-    if (wasActive !== state.active) onActive(state.active);
+    // "Inactive" always runs the teardown, so a failed or abandoned start can
+    // never leave the studio hidden or the camera bubble on.
+    if (wasActive !== state.active || !state.active) onActive(state.active);
     if (!state.active) {
       extras = {};
       return dispose();
@@ -102,7 +104,7 @@ module.exports = function attachStudio({
         const y = ((p.y - bounds.y) / bounds.height - r.y) / r.h;
         if (x >= 0 && x <= 1 && y >= 0 && y <= 1)
           window()?.webContents.send("relay:pointer", { x, y });
-      }, 350);
+      }, 150);
   });
   ipcMain.on("relay:control-action", (event, action) => {
     if (
@@ -135,8 +137,12 @@ module.exports = function attachStudio({
         skipTaskbar: true,
         resizable: false,
         hasShadow: false,
+        // Cover the whole display, menu bar included, so fractions match the capture.
+        enableLargerThanScreen: true,
         webPreferences: secure,
       });
+      regionWindow.setAlwaysOnTop(true, "screen-saver");
+      regionWindow.setBounds(bounds);
       regionWindow.setContentProtection(true);
       const choose = (e, value) => {
         if (e.sender !== regionWindow?.webContents) return;
@@ -222,6 +228,14 @@ module.exports = function attachStudio({
       region = undefined;
     },
     region: () => region,
+    reset() {
+      const wasActive = state.active;
+      state = { active: false };
+      extras = {};
+      onState(state);
+      onActive(false);
+      if (wasActive) dispose();
+    },
     patch(next) {
       extras = { ...extras, ...next };
       toolbar?.webContents.send("relay:state", { ...state, ...extras });
