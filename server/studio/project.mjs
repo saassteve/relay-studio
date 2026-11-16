@@ -1,5 +1,6 @@
 import { problem, parseJSON } from "./schema.mjs";
 import { WALLPAPERS, PRESETS } from "./compose.mjs";
+import { CAPTION_STYLES, TITLE_TYPES } from "./titles.mjs";
 export const defaultLayout = () => ({
   width: 1280,
   height: 720,
@@ -82,6 +83,9 @@ export function validateProject(input, find) {
       denoise: Boolean(audio.denoise),
     },
     captions: Boolean(raw.captions),
+    captionStyle: CAPTION_STYLES.includes(raw.captionStyle)
+      ? raw.captionStyle
+      : "clean",
   };
   const total = segments.reduce((n, s) => n + s.end - s.start, 0);
   if (
@@ -89,28 +93,46 @@ export function validateProject(input, find) {
     (input.overlays || []).length > 60
   )
     throw problem(400, "Use at most 60 visual effects.");
-  const overlays = (input.overlays || []).map((o, i) => {
-    if (!["text", "arrow", "box", "blur", "zoom", "cursor"].includes(o.type))
-      throw problem(400, "Unsupported visual effect.");
-    const start = number(o.start, 0, total, "effect start"),
-      end = number(o.end, 0, total + 0.05, "effect end");
-    if (end <= start)
-      throw problem(400, "An effect must have a positive duration.");
-    return {
-      id: String(o.id || i).slice(0, 80),
-      type: o.type,
-      start,
-      end,
-      x: number(o.x ?? 0.1, 0, 0.95, "effect x"),
-      y: number(o.y ?? 0.1, 0, 0.95, "effect y"),
-      w: number(o.w ?? 0.3, 0.01, 1, "effect width"),
-      h: number(o.h ?? 0.15, 0.01, 1, "effect height"),
-      scale: number(o.scale ?? 1.8, 1, 4, "zoom"),
-      text: String(o.text || "").slice(0, 500),
-      color: /^#[a-f0-9]{6}$/i.test(o.color || "") ? o.color : "#d6f475",
-      ...(o.type === "zoom" && o.auto === true ? { auto: true } : {}),
-    };
-  });
+  const overlays = (input.overlays || [])
+    .map((o, i) => {
+      if (
+        ![
+          "text",
+          "arrow",
+          "box",
+          "blur",
+          "zoom",
+          "cursor",
+          ...TITLE_TYPES,
+        ].includes(o.type)
+      )
+        throw problem(400, "Unsupported visual effect.");
+      const start = number(o.start, 0, 86400, "effect start"),
+        until = number(o.end, 0, 86400.05, "effect end");
+      if (until <= start)
+        throw problem(400, "An effect must have a positive duration.");
+      // Trimming the video can leave an effect hanging past the end: keep what fits.
+      if (start > total - 0.1) return null;
+      const end = Math.min(until, total);
+      return {
+        id: String(o.id || i).slice(0, 80),
+        type: o.type,
+        start,
+        end,
+        x: number(o.x ?? 0.1, 0, 0.95, "effect x"),
+        y: number(o.y ?? 0.1, 0, 0.95, "effect y"),
+        w: number(o.w ?? 0.3, 0.01, 1, "effect width"),
+        h: number(o.h ?? 0.15, 0.01, 1, "effect height"),
+        scale: number(o.scale ?? 1.8, 1, 4, "zoom"),
+        text: String(o.text || "").slice(0, 500),
+        ...(TITLE_TYPES.includes(o.type)
+          ? { sub: String(o.sub || "").slice(0, 200) }
+          : {}),
+        color: /^#[a-f0-9]{6}$/i.test(o.color || "") ? o.color : "#d6f475",
+        ...(o.type === "zoom" && o.auto === true ? { auto: true } : {}),
+      };
+    })
+    .filter(Boolean);
   const cta = {
     label: String(input.cta?.label || "").slice(0, 80),
     url: String(input.cta?.url || "").slice(0, 2000),
@@ -123,10 +145,12 @@ export function validateProject(input, find) {
     .map((sc, i) => {
       if (!PRESETS.includes(sc.preset))
         throw problem(400, "Choose a supported layout.");
-      const start = number(sc.start, 0, total, "layout start"),
-        end = number(sc.end, 0, total + 0.05, "layout end");
-      if (end - start < 0.5)
+      const start = number(sc.start, 0, 86400, "layout start"),
+        until = number(sc.end, 0, 86400.05, "layout end");
+      if (until - start < 0.5)
         throw problem(400, "A layout change must last at least half a second.");
+      const end = Math.min(until, total);
+      if (end - start < 0.5) return null;
       return {
         id: String(sc.id || i).slice(0, 80),
         start,
@@ -134,6 +158,7 @@ export function validateProject(input, find) {
         preset: sc.preset,
       };
     })
+    .filter(Boolean)
     .sort((a, b) => a.start - b.start);
   return { version: 1, segments, layout, overlays, scenes, cta };
 }
@@ -141,7 +166,32 @@ export function getProject(v) {
   const p = parseJSON(v.project, {});
   return p.version === 1 ? p : initialProject(v);
 }
+// Removes stretches of one source from the video. Titles, effects and layout changes
+// move with what they were pointing at, and anything that was cut away goes too.
 export function cutRanges(project, sourceId, ranges) {
+  // The same stretches on the timeline as it is now.
+  const gone = [];
+  let offset = 0;
+  for (const s of project.segments) {
+    if (s.sourceId === sourceId)
+      for (const r of ranges) {
+        const start = Math.max(r.start, s.start),
+          end = Math.min(r.end, s.end);
+        if (end > start)
+          gone.push({
+            start: offset + start - s.start,
+            end: offset + end - s.start,
+          });
+      }
+    offset += s.end - s.start;
+  }
+  gone.sort((a, b) => a.start - b.start);
+  const removed = [];
+  for (const g of gone) {
+    const last = removed.at(-1);
+    if (last && g.start <= last.end) last.end = Math.max(last.end, g.end);
+    else removed.push({ ...g });
+  }
   let segments = project.segments;
   for (const r of ranges) {
     segments = segments.flatMap((s) => {
@@ -155,7 +205,29 @@ export function cutRanges(project, sourceId, ranges) {
   }
   if (!segments.length)
     throw problem(400, "These cuts would remove the entire video.");
-  return { ...project, segments };
+  const total = segments.reduce((n, s) => n + s.end - s.start, 0);
+  const remap = (t) => {
+    let before = 0;
+    for (const r of removed) {
+      if (t >= r.end) before += r.end - r.start;
+      else if (t > r.start) before += t - r.start;
+    }
+    return Math.min(total, Math.max(0, t - before));
+  };
+  const moved = (items, shortest) =>
+    (items || [])
+      .map((item) => ({
+        ...item,
+        start: remap(item.start),
+        end: remap(item.end),
+      }))
+      .filter((item) => item.end - item.start >= shortest);
+  return {
+    ...project,
+    segments,
+    overlays: moved(project.overlays, 0.1),
+    ...(project.scenes ? { scenes: moved(project.scenes, 0.5) } : {}),
+  };
 }
 export function outputWords(project, find) {
   let offset = 0;

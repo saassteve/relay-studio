@@ -32,6 +32,7 @@ export function registerRecordings({
   find,
   serialize,
   renderer,
+  autoTranscribe,
 }) {
   const root = path.join(dataDir, "recordings");
   mkdirSync(root, { recursive: true });
@@ -391,6 +392,9 @@ export function registerRecordings({
         "UPDATE recordings SET status='complete',video_id=? WHERE id=?",
       ).run(videoId, row.id);
       jobs.enqueue("stream", { videoId });
+      // With the speech model already on this device, the transcript is made
+      // straight away so captions and word-based cutting are ready.
+      if (assets.some((x) => x.role === "microphone")) autoTranscribe?.(videoId);
       rmSync(path.join(root, row.id), { recursive: true, force: true });
       db.prepare("DELETE FROM recording_parts WHERE recording_id=?").run(
         row.id,

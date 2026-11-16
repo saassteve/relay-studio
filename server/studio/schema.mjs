@@ -93,3 +93,15 @@ export function publicError(error) {
     500,
   );
 }
+
+// A download is named after the video, in characters every system accepts.
+export function downloadName(video) {
+  const base =
+    String(video.title || "")
+      .normalize("NFKD")
+      .replace(/[^\w .-]+/g, "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .slice(0, 80) || "Relay video";
+  return `${base}.${video.mime === "video/webm" ? "webm" : "mp4"}`;
+}

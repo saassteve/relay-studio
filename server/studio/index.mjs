@@ -28,6 +28,12 @@ import {
 } from "./project.mjs";
 import { registerPortable } from "./portable.mjs";
 import { autoZoom } from "./autozoom.mjs";
+import { createAssistantEdits } from "./assistant-edits.mjs";
+import { registerAI } from "./ai/index.mjs";
+import { readFileSync as readText } from "node:fs";
+const packageVersion = JSON.parse(
+  readText(new URL("../../package.json", import.meta.url), "utf8"),
+).version;
 import { registerIntegrations } from "./integrations.mjs";
 const run = promisify(execFile);
 export function registerStudio(context) {
@@ -48,6 +54,8 @@ export function registerStudio(context) {
   };
   const projectResponse = (v) => ({
     project: getProject(v),
+    // What the shared video currently shows, to tell when edits are unpublished.
+    published: publishedProject(v),
     revision: v.revision,
     canUndo: v.history_cursor > 0,
     canRedo: Boolean(
@@ -158,7 +166,14 @@ export function registerStudio(context) {
   app.get("/api/videos/:id/tracks/:role", owner, (req, res) => {
     const v = find(req.params.id),
       assets = renderer.assetsFor(v),
-      asset = assets.find((a) => a.role === req.params.role);
+      // "main" is whichever track carries the picture; "voice" is the microphone.
+      wanted =
+        req.params.role === "main"
+          ? ["screen", "primary", "camera"]
+          : req.params.role === "voice"
+            ? ["microphone"]
+            : [req.params.role],
+      asset = wanted.map((r) => assets.find((a) => a.role === r)).find(Boolean);
     if (!asset) throw problem(404, "This source track was not found.");
     mediaHeaders(res, asset.mime);
     res.sendFile(asset.filename, { root: path.join(dataDir, "media") });
@@ -431,8 +446,32 @@ export function registerStudio(context) {
     writeFileSync(path.join(root, "master.m3u8"), master.join("\n") + "\n");
     return { videoId, ready: true };
   });
-  const recordings = registerRecordings({ ...context, jobs, renderer });
+  const recordings = registerRecordings({
+    ...context,
+    jobs,
+    renderer,
+    autoTranscribe: (videoId) => {
+      const model = "Xenova/whisper-tiny.en";
+      if (transcription.supported && transcription.modelReady(model))
+        jobs.enqueue("transcribe", { videoId, model });
+    },
+  });
   registerPortable({ ...context, renderer, sourceFind });
-  registerIntegrations({ ...context, sharing, jobs });
+  registerAI({ app, db, owner, admin, find, jobs });
+  const edits = createAssistantEdits({
+    db,
+    find,
+    sourceFind,
+    save,
+    validateProject,
+    suggestions: transcription.suggestions,
+  });
+  registerIntegrations({
+    ...context,
+    sharing,
+    jobs,
+    edits,
+    version: packageVersion,
+  });
   return { jobs, renderer, recordings, sharing, close: () => jobs.close() };
 }

@@ -1,16 +1,21 @@
-import { useState } from "react";
-import { Check, Copy, Code2, LoaderCircle } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Copy, Code2 } from "lucide-react";
 import { api, type Clip, type ShareConfig } from "./types";
 export function ShareSettings({
   clip,
   onChange,
   notify,
   time = 0,
+  saveRef,
+  onDirty,
 }: {
   clip: Clip;
   onChange: (v: Clip) => void;
   notify: (s: string) => void;
   time?: number;
+  // The dialog's own button saves, so a typed password is never lost.
+  saveRef?: React.RefObject<() => Promise<boolean>>;
+  onDirty?: (dirty: boolean) => void;
 }) {
   const [c, setC] = useState<ShareConfig>({
       access: "link",
@@ -39,13 +44,59 @@ export function ShareSettings({
       );
     }
   };
+  const initial = { access: "link", download: true, ...clip.shareConfig };
+  const dirty =
+    Boolean(password) ||
+    clearPassword ||
+    c.access !== initial.access ||
+    c.download !== initial.download ||
+    (c.expiresAt || "") !== (initial.expiresAt || "") ||
+    emails !== (clip.shareConfig?.invitedEmails || []).join(", ");
+  useEffect(() => onDirty?.(dirty), [dirty, onDirty]);
+  const save = async () => {
+    if (!dirty) return true;
+    setBusy(true);
+    setError("");
+    try {
+      const v = await api<Clip>(`/api/videos/${clip.id}/share-settings`, {
+        method: "PUT",
+        body: JSON.stringify({
+          ...c,
+          invitedEmails: emails
+            .split(",")
+            .map((e) => e.trim())
+            .filter(Boolean),
+          ...(clearPassword ? { password: "" } : password ? { password } : {}),
+        }),
+      });
+      onChange(v);
+      setC({ access: "link", download: true, ...v.shareConfig });
+      setPassword("");
+      setClearPassword(false);
+      notify("Sharing settings saved");
+      return true;
+    } catch (e) {
+      setError((e as Error).message);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (saveRef) saveRef.current = save;
+  // Which preset matches the saved expiry, if any.
+  const daysLeft = c.expiresAt
+    ? (new Date(c.expiresAt).getTime() - Date.now()) / 86400000
+    : 0;
+  const expiry = !c.expiresAt
+    ? "0"
+    : ([1, 7, 30].find((d) => Math.abs(daysLeft - d) < 0.01)?.toString() ??
+      "keep");
   return (
-    <div className="share-settings">
+    <div className="share-settings" aria-busy={busy}>
       <div className="device-grid">
         <label>
           Who can watch
           <select
-            aria-label="Viewer access"
             value={c.access}
             onChange={(e) =>
               setC({ ...c, access: e.target.value as ShareConfig["access"] })
@@ -58,35 +109,40 @@ export function ShareSettings({
         </label>
         <label>
           Expires
-          <input
-            aria-label="Link expiration"
-            type="datetime-local"
-            value={
-              c.expiresAt
-                ? new Date(
-                    new Date(c.expiresAt).getTime() -
-                      new Date().getTimezoneOffset() * 60000,
-                  )
-                    .toISOString()
-                    .slice(0, 16)
-                : ""
-            }
-            onChange={(e) =>
+          <select
+            value={expiry}
+            onChange={(e) => {
+              const days = Number(e.target.value);
+              if (e.target.value === "keep") return;
               setC({
                 ...c,
-                expiresAt: e.target.value
-                  ? new Date(e.target.value).toISOString()
+                expiresAt: days
+                  ? new Date(Date.now() + days * 86400000).toISOString()
                   : null,
-              })
-            }
-          />
+              });
+            }}
+          >
+            <option value="0">Never</option>
+            <option value="1">In 1 day</option>
+            <option value="7">In 7 days</option>
+            <option value="30">In 30 days</option>
+            {expiry === "keep" && c.expiresAt && (
+              <option value="keep">
+                On{" "}
+                {new Date(c.expiresAt).toLocaleDateString(undefined, {
+                  day: "numeric",
+                  month: "short",
+                  year: "numeric",
+                })}
+              </option>
+            )}
+          </select>
         </label>
       </div>
       {c.access === "invited" && (
         <label className="field">
           Invited member emails
           <input
-            aria-label="Invited member emails"
             value={emails}
             onChange={(e) => setEmails(e.target.value)}
             placeholder="sam@example.com, alex@example.com"
@@ -97,10 +153,13 @@ export function ShareSettings({
         </label>
       )}
       <div className="device-grid">
-        <label>
-          {c.hasPassword ? "Replace video password" : "Video password"}
+        <div className="field-block">
+          <label htmlFor="share-password">
+            {c.hasPassword ? "Replace video password" : "Video password"}
+          </label>
           <input
-            aria-label="Video password"
+            id="share-password"
+            aria-describedby="share-password-hint"
             type="password"
             autoComplete="new-password"
             minLength={6}
@@ -109,13 +168,12 @@ export function ShareSettings({
               setPassword(e.target.value);
               setClearPassword(false);
             }}
-            placeholder={
-              c.hasPassword
-                ? "Password is set"
-                : "Optional · at least 6 characters"
-            }
+            placeholder={c.hasPassword ? "Password is set" : ""}
           />
-        </label>
+          <span className="small muted" id="share-password-hint">
+            Optional. At least 6 characters.
+          </span>
+        </div>
         <div className="share-options">
           <label className="check-label">
             <input
@@ -138,50 +196,6 @@ export function ShareSettings({
         </div>
       </div>
       <div className="actions share-settings-actions">
-        <button
-          className="btn small"
-          disabled={busy}
-          onClick={async () => {
-            setBusy(true);
-            setError("");
-            try {
-              const v = await api<Clip>(
-                `/api/videos/${clip.id}/share-settings`,
-                {
-                  method: "PUT",
-                  body: JSON.stringify({
-                    ...c,
-                    invitedEmails: emails
-                      .split(",")
-                      .map((e) => e.trim())
-                      .filter(Boolean),
-                    ...(clearPassword
-                      ? { password: "" }
-                      : password
-                        ? { password }
-                        : {}),
-                  }),
-                },
-              );
-              onChange(v);
-              setC({ access: "link", download: true, ...v.shareConfig });
-              setPassword("");
-              setClearPassword(false);
-              notify("Viewer access settings saved");
-            } catch (e) {
-              setError((e as Error).message);
-            } finally {
-              setBusy(false);
-            }
-          }}
-        >
-          {busy ? (
-            <LoaderCircle size={14} className="spin" />
-          ) : (
-            <Check size={14} />
-          )}
-          Save access settings
-        </button>
         <button className="text-button small" onClick={() => void copy()}>
           <Copy size={14} />
           Link to {Math.floor(time / 60)}:

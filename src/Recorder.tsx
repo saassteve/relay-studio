@@ -27,14 +27,19 @@ import {
 } from "./drafts";
 import { cachedPreferences, pref, savePreferences } from "./prefs";
 import { CameraLookPicker } from "./CameraLook";
+import { confirmDialog, radio } from "./Modal";
 import type { CameraLook } from "./cameraEffects";
 
+// A link to this computer only opens here, so it is never offered as a way to share.
+const localOnly = ["127.0.0.1", "localhost"].includes(location.hostname);
 export function Recorder({
   onClose,
   onSaved,
+  guard,
 }: {
   onClose: () => void;
   onSaved: (c: Clip, copied?: boolean) => void;
+  guard?: React.RefObject<() => Promise<boolean>>;
 }) {
   const saved = cachedPreferences();
   const canCaptureScreen =
@@ -47,6 +52,8 @@ export function Recorder({
     [phase, setPhase] = useState("setup"),
     [seconds, setSeconds] = useState(0),
     [error, setError] = useState(""),
+    [notice, setNotice] = useState(""),
+    [micTest, setMicTest] = useState(""),
     [title, setTitle] = useState(""),
     [sources, setSources] = useState<DesktopSource[] | null>(null),
     [devices, setDevices] = useState<MediaDeviceInfo[]>([]),
@@ -103,6 +110,16 @@ export function Recorder({
       setSystemAudioState(v);
       void savePreferences({ systemAudio: v });
     };
+  // The tab itself shows that a recording is running, so it is easy to find again.
+  const ownTitle = useRef(document.title);
+  useEffect(() => {
+    if (phase !== "recording" && phase !== "paused") return;
+    const before = ownTitle.current;
+    document.title = `${phase === "paused" ? "Paused" : "● Recording"} ${clock(seconds)} · Relay`;
+    return () => {
+      document.title = before;
+    };
+  }, [phase, seconds]);
   const countdownDone = useRef<((go: boolean) => void) | null>(null);
   const runCountdown = (seconds: number) =>
     new Promise<boolean>((resolve) => {
@@ -129,6 +146,16 @@ export function Recorder({
       addEventListener("keydown", key, true);
       countdownDone.current = done;
     });
+  // Closing while recording stops the take, so ask first.
+  if (guard)
+    guard.current = async () =>
+      !["recording", "paused"].includes(phase) ||
+      confirmDialog({
+        title: "Stop recording and close?",
+        body: "What you’ve recorded so far is kept. You can finish it from Activity.",
+        confirm: "Stop and close",
+        cancel: "Keep recording",
+      });
   const preview = useRef<HTMLVideoElement>(null),
     engine = useRef<RecordingEngine | null>(null),
     capture = useRef<CaptureSession | null>(null),
@@ -215,7 +242,7 @@ export function Recorder({
         else if (action === "pause") pause();
         else if (action === "retake") {
           engine.current?.retake();
-          setError("The previous 10 seconds will be cut. Keep recording.");
+          setNotice("The last 10 seconds will be cut. Keep recording.");
         }
       }),
     [],
@@ -321,7 +348,17 @@ export function Recorder({
         seconds: 0,
         notes: "",
       });
-      setError((e as Error).message);
+      // Closing the browser's screen picker is a change of mind, not a failure.
+      const err = e as Error;
+      // Only the screen picker throws a bare refusal now; devices explain themselves.
+      setError(
+        /by system/i.test(err.message)
+          ? "Your computer is blocking screen recording for this browser. On a Mac, open System Settings → Privacy & Security → Screen & System Audio Recording, turn it on for your browser, then try again."
+          : err.name === "NotAllowedError" ||
+              /permission denied/i.test(err.message)
+            ? ""
+            : err.message,
+      );
       setPhase("setup");
     }
   };
@@ -348,7 +385,7 @@ export function Recorder({
         draft?.meta,
       );
       let v = await waitForDraft(id, setProgress);
-      if (autoShare) {
+      if (autoShare && !localOnly) {
         v = await api<Clip>(`/api/videos/${v.id}/share`, { method: "POST" });
         try {
           await navigator.clipboard.writeText(
@@ -367,17 +404,17 @@ export function Recorder({
   };
   return (
     <div className="recorder-body">
-      <div className="eyebrow">THE FLOOR IS YOURS</div>
       <h2>
         {phase === "review" || phase === "saving"
-          ? "That’s a wrap."
-          : "Show it. Say it. Send it."}
+          ? "Name your recording"
+          : "New recording"}
       </h2>
-      <p className="muted">
-        {phase === "review" || phase === "saving"
-          ? "Give your video a name. You can trim it in the editor next."
-          : "A little context goes a long way."}
-      </p>
+      {(phase === "review" || phase === "saving") && (
+        <p className="muted">
+          {clock(seconds)} recorded and safely stored. Give it a name, then open
+          it to tidy up and send.
+        </p>
+      )}
       {sources ? (
         <div className="source-picker">
           <h3>Choose what to share</h3>
@@ -427,7 +464,8 @@ export function Recorder({
               <button
                 className="recorder-countdown"
                 onClick={() => countdownDone.current?.(true)}
-                aria-live="assertive"
+                aria-label={`Starting in ${count}. Click to start now.`}
+                autoFocus
               >
                 <span>
                   {count}
@@ -443,15 +481,15 @@ export function Recorder({
                     <Camera size={23} />
                   </span>
                 </div>
-                <strong>Your next great explanation starts here.</strong>
-                <span>Choose a screen, window or browser tab.</span>
+                <strong>Ready when you are</strong>
+                <span>You’ll choose what to share after pressing Start.</span>
               </div>
             )}
             {(phase === "review" || phase === "saving") && (
               <div className="preview-placeholder">
                 <Check size={38} />
-                <strong>Your source tracks are saved.</strong>
-                <span>{clock(seconds)} · Recoverable on this device</span>
+                <strong>Saved on this device</strong>
+                <span>{clock(seconds)} · Safe even if you close Relay now</span>
               </div>
             )}
             {["recording", "paused"].includes(phase) && (
@@ -470,8 +508,8 @@ export function Recorder({
               <div className="preparing">
                 <LoaderCircle className="spin" />
                 {engine.current
-                  ? "Saving the final source chunks…"
-                  : "Waiting for capture permission…"}
+                  ? "Finishing your recording…"
+                  : "Choose what to share in the window that opened…"}
               </div>
             )}
           </div>
@@ -479,11 +517,16 @@ export function Recorder({
             <>
               {!canCaptureScreen && (
                 <p className="studio-hint">
-                  This browser supports camera recording. Import a native screen
-                  recording from your device to edit it here.
+                  Phones and tablets can’t record their screen in a browser. Use
+                  your device’s own screen recorder, then choose Upload to edit
+                  it here.
                 </p>
               )}
-              <div className="mode-options">
+              <div
+                className="mode-options"
+                role="radiogroup"
+                aria-label="What to record"
+              >
                 {(
                   [
                     ["screen-camera", "Screen + camera", Monitor],
@@ -493,6 +536,7 @@ export function Recorder({
                 ).map(([key, label, Icon]) => (
                   <button
                     key={key}
+                    {...radio(mode === key)}
                     className={mode === key ? "selected" : ""}
                     disabled={key !== "camera" && !canCaptureScreen}
                     onClick={() => setMode(key)}
@@ -522,113 +566,129 @@ export function Recorder({
           )}
           {phase === "setup" && (
             <div className="recording-extra">
-              <div className="device-grid">
-                <label>
-                  Microphone
-                  <select
-                    aria-label="Microphone device"
-                    value={microphoneId}
-                    onChange={(e) => setMicrophoneId(e.target.value)}
-                  >
-                    <option value="">System default</option>
-                    {devices
-                      .filter((d) => d.kind === "audioinput")
-                      .map((d, i) => (
-                        <option key={d.deviceId || i} value={d.deviceId}>
-                          {d.label || `Microphone ${i + 1}`}
-                        </option>
-                      ))}
-                  </select>
-                </label>
-                <label>
-                  Camera
-                  <select
-                    aria-label="Camera device"
-                    value={cameraId}
-                    onChange={(e) => setCameraId(e.target.value)}
-                  >
-                    <option value="">System default</option>
-                    {devices
-                      .filter((d) => d.kind === "videoinput")
-                      .map((d, i) => (
-                        <option key={d.deviceId || i} value={d.deviceId}>
-                          {d.label || `Camera ${i + 1}`}
-                        </option>
-                      ))}
-                  </select>
-                </label>
-              </div>
-              <div className="actions">
-                <label className="check-label">
-                  <input
-                    type="checkbox"
-                    checked={systemAudio}
-                    onChange={(e) => setSystemAudio(e.target.checked)}
-                  />
-                  System audio
-                </label>
-                {window.relayDesktop && (
-                  <label className="check-label">
-                    <input
-                      type="checkbox"
-                      checked={crop}
-                      onChange={(e) => setCrop(e.target.checked)}
-                    />
-                    <Crop size={14} />
-                    Select a region
-                  </label>
-                )}
-                <button
-                  className="text-button"
-                  onClick={async () => {
-                    try {
-                      const s = await navigator.mediaDevices.getUserMedia({
-                        audio: {
-                          deviceId: microphoneId
-                            ? { exact: microphoneId }
-                            : undefined,
-                        },
-                      });
-                      const a = new AudioContext(),
-                        meter = a.createAnalyser();
-                      a.createMediaStreamSource(s).connect(meter);
-                      const t = setInterval(() => {
-                        const values = new Uint8Array(meter.fftSize);
-                        meter.getByteTimeDomainData(values);
-                        setMeter(
-                          Math.min(
-                            1,
-                            Math.sqrt(
-                              values.reduce(
-                                (n, v) => n + ((v - 128) / 128) ** 2,
-                                0,
-                              ) / values.length,
-                            ) * 4,
-                          ),
-                        );
-                      }, 100);
-                      setTimeout(() => {
-                        clearInterval(t);
-                        s.getTracks().forEach((t) => t.stop());
-                        void a.close();
-                        setMeter(0);
-                      }, 3000);
-                      setDevices(
-                        await navigator.mediaDevices.enumerateDevices(),
-                      );
-                    } catch (e) {
-                      setError((e as Error).message);
-                    }
-                  }}
-                >
-                  Test microphone
-                </button>
-                <span
-                  className={`audio-meter ${meter > 0.92 ? "is-loud" : ""}`}
-                >
-                  <i style={{ width: `${meter * 100}%` }} />
-                </span>
-              </div>
+              <details className="recorder-more">
+                <summary>Microphone, camera and sound check</summary>
+                <div className="cut-more-body">
+                  <div className="device-grid">
+                    <label>
+                      Microphone
+                      <select
+                        aria-label="Microphone device"
+                        value={microphoneId}
+                        onChange={(e) => setMicrophoneId(e.target.value)}
+                      >
+                        <option value="">System default</option>
+                        {devices
+                          .filter((d) => d.kind === "audioinput")
+                          .map((d, i) => (
+                            <option key={d.deviceId || i} value={d.deviceId}>
+                              {d.label || `Microphone ${i + 1}`}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                    <label>
+                      Camera
+                      <select
+                        aria-label="Camera device"
+                        value={cameraId}
+                        onChange={(e) => setCameraId(e.target.value)}
+                      >
+                        <option value="">System default</option>
+                        {devices
+                          .filter((d) => d.kind === "videoinput")
+                          .map((d, i) => (
+                            <option key={d.deviceId || i} value={d.deviceId}>
+                              {d.label || `Camera ${i + 1}`}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="actions">
+                    <label className="check-label">
+                      <input
+                        type="checkbox"
+                        checked={systemAudio}
+                        onChange={(e) => setSystemAudio(e.target.checked)}
+                      />
+                      Record computer sound
+                    </label>
+                    {window.relayDesktop && (
+                      <label className="check-label">
+                        <input
+                          type="checkbox"
+                          checked={crop}
+                          onChange={(e) => setCrop(e.target.checked)}
+                        />
+                        <Crop size={14} />
+                        Select a region
+                      </label>
+                    )}
+                    <button
+                      className="text-button"
+                      onClick={async () => {
+                        try {
+                          const s = await navigator.mediaDevices.getUserMedia({
+                            audio: {
+                              deviceId: microphoneId
+                                ? { exact: microphoneId }
+                                : undefined,
+                            },
+                          });
+                          const a = new AudioContext(),
+                            meter = a.createAnalyser();
+                          a.createMediaStreamSource(s).connect(meter);
+                          let loudest = 0;
+                          setMicTest("Say something…");
+                          const t = setInterval(() => {
+                            const values = new Uint8Array(meter.fftSize);
+                            meter.getByteTimeDomainData(values);
+                            const level = Math.min(
+                              1,
+                              Math.sqrt(
+                                values.reduce(
+                                  (n, v) => n + ((v - 128) / 128) ** 2,
+                                  0,
+                                ) / values.length,
+                              ) * 4,
+                            );
+                            loudest = Math.max(loudest, level);
+                            setMeter(level);
+                          }, 100);
+                          setTimeout(() => {
+                            clearInterval(t);
+                            s.getTracks().forEach((t) => t.stop());
+                            void a.close();
+                            setMeter(0);
+                            setMicTest(
+                              loudest > 0.08
+                                ? "Your microphone is working."
+                                : "No sound picked up. Check the microphone chosen above.",
+                            );
+                          }, 3000);
+                          setDevices(
+                            await navigator.mediaDevices.enumerateDevices(),
+                          );
+                        } catch (e) {
+                          setError((e as Error).message);
+                        }
+                      }}
+                    >
+                      Test microphone
+                    </button>
+                    <span
+                      className={`audio-meter ${meter > 0.92 ? "is-loud" : ""}`}
+                      aria-hidden="true"
+                    >
+                      <i style={{ width: `${meter * 100}%` }} />
+                    </span>
+                    <span className="small muted" role="status">
+                      {micTest}
+                    </span>
+                  </div>
+                </div>
+              </details>
               {mode !== "screen" && (
                 <div className="field small">
                   Camera look
@@ -653,16 +713,21 @@ export function Recorder({
                   </span>
                 </label>
               )}
-              <label className="field small">
-                Speaker notes
-                <textarea
-                  aria-label="Speaker notes"
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                  placeholder="Your talking points. Visible in the desktop teleprompter."
-                  rows={2}
-                />
-              </label>
+              {window.relayDesktop && (
+                <details className="recorder-more">
+                  <summary>Speaker notes</summary>
+                  <label className="field small">
+                    <span className="sr-only">Speaker notes</span>
+                    <textarea
+                      aria-label="Speaker notes"
+                      value={notes}
+                      onChange={(e) => setNotes(e.target.value)}
+                      placeholder="Your talking points. Only you see them while recording."
+                      rows={2}
+                    />
+                  </label>
+                </details>
+              )}
             </div>
           )}
           {["recording", "paused"].includes(phase) && (
@@ -671,16 +736,14 @@ export function Recorder({
                 className="text-button"
                 onClick={() => {
                   engine.current?.retake();
-                  setError(
-                    "Previous 10 seconds marked for removal. Keep recording.",
-                  );
+                  setNotice("The last 10 seconds will be cut. Keep recording.");
                 }}
               >
                 <RotateCcw size={14} />
                 Retake last 10s
               </button>
               <span className="small muted">
-                Separate tracks · Checkpointed every second
+                Saved every second as you record
               </span>
             </div>
           )}
@@ -688,21 +751,22 @@ export function Recorder({
             <label className="field">
               Video title
               <input
+                autoFocus
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="What’s this video about?"
+                placeholder="Give your video a name"
                 maxLength={160}
               />
             </label>
           )}
-          {phase === "review" && (
+          {phase === "review" && !localOnly && (
             <label className="check-label">
               <input
                 type="checkbox"
                 checked={autoShare}
                 onChange={(e) => setAutoShare(e.target.checked)}
               />
-              Create a share link and copy it when ready
+              Copy a share link when it’s ready
             </label>
           )}
           {error && (
@@ -710,14 +774,31 @@ export function Recorder({
               {error}
             </div>
           )}
+          {notice && ["recording", "paused"].includes(phase) && (
+            <p className="rec-notice">{notice}</p>
+          )}
+          <p className="sr-only" role="status">
+            {phase === "recording"
+              ? "Recording"
+              : phase === "paused"
+                ? "Recording paused"
+                : phase === "review"
+                  ? "Recording saved"
+                  : phase === "saving"
+                    ? "Saving"
+                    : ""}{" "}
+            {notice}
+          </p>
           <div className="recorder-bottom">
             <span className="small muted">
               {["recording", "paused"].includes(phase) ? (
-                "Make it a good one. No rush."
+                "Recording. Come back to this tab and press Finish when you’re done."
               ) : (
                 <>
                   <span className="tiny-dot" />
-                  Saved locally as you record.
+                  {phase === "setup" && mode !== "camera"
+                    ? "You’ll choose which screen or window after pressing Start. When you’re done, come back to this tab and press Finish."
+                    : "Saved on this device as you record."}
                 </>
               )}
             </span>
@@ -726,12 +807,11 @@ export function Recorder({
                 <button className="btn primary" onClick={() => void begin()}>
                   <span className="record-dot" />
                   Start recording
-                  <ChevronRight size={16} />
                 </button>
               )}
               {["recording", "paused"].includes(phase) && (
                 <>
-                  <button className="btn" onClick={pause}>
+                  <button className="btn" onClick={pause} autoFocus>
                     {phase === "paused" ? (
                       <Play size={16} />
                     ) : (
@@ -752,6 +832,16 @@ export function Recorder({
                     disabled={phase === "saving"}
                     onClick={async () => {
                       try {
+                        if (
+                          !(await confirmDialog({
+                            title: "Discard this recording?",
+                            body: "It will be deleted. You can’t undo this.",
+                            confirm: "Discard",
+                            cancel: "Keep it",
+                            destructive: true,
+                          }))
+                        )
+                          return;
                         if (draft) await discardDraft(draft.id);
                         onClose();
                       } catch (e) {
@@ -771,7 +861,9 @@ export function Recorder({
                     ) : (
                       <ArrowUpRight size={16} />
                     )}{" "}
-                    {phase === "saving" ? `Saving… ${progress}` : "Save & edit"}
+                    {phase === "saving"
+                      ? `Preparing your video… ${progress}`
+                      : "Open in editor"}
                   </button>
                   {phase === "saving" && (
                     <button className="text-button" onClick={onClose}>

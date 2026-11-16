@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import path from "node:path";
 import { existsSync } from "node:fs";
-import { parseJSON, problem, mediaHeaders } from "./schema.mjs";
+import { parseJSON, problem, mediaHeaders, downloadName } from "./schema.mjs";
 import { passwordHash, passwordMatches } from "./auth.mjs";
 import {
   captions,
@@ -76,6 +76,13 @@ export function registerSharing({
     return {
       ...result,
       downloadAllowed: c.download !== false,
+      // Who shared it, so viewers see a name rather than a placeholder.
+      author: (() => {
+        const name = db
+          .prepare("SELECT name FROM members WHERE id='owner'")
+          .get()?.name;
+        return name && name !== "Workspace owner" ? name : "";
+      })(),
       outline: (() => {
         const o = parseJSON(v.outline, {});
         return o.projectSegments ===
@@ -193,10 +200,7 @@ export function registerSharing({
     if (req.query.download && c.download === false)
       throw problem(403, "The owner has disabled downloads.");
     mediaHeaders(res, v.mime);
-    if (req.query.download)
-      res.attachment(
-        `relay-${v.id}.${v.mime === "video/webm" ? "webm" : "mp4"}`,
-      );
+    if (req.query.download) res.attachment(downloadName(v));
     res.sendFile(v.filename, { root: path.join(dataDir, "media") });
   });
   app.get("/api/share/:token/captions.:format", (req, res) => {

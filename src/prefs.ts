@@ -9,6 +9,8 @@ export interface Preferences {
   afterRecording?: "copy-link" | "open-editor";
   countdown?: 0 | 3 | 5;
   hideWindow?: boolean;
+  // Single-key shortcuts such as R for a new recording.
+  keyShortcuts?: boolean;
   bubble?: boolean;
   bubbleSize?: BubbleSize;
   quality?: 1280 | 1920 | 3840;
@@ -27,6 +29,7 @@ export const defaults: Required<
   afterRecording: "copy-link",
   countdown: 3,
   hideWindow: true,
+  keyShortcuts: true,
   bubble: true,
   bubbleSize: "m",
   quality: 1920,

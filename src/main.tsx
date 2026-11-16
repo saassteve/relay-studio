@@ -4,6 +4,7 @@ import App from "./App";
 import { OfflineStatus } from "./OfflineStatus";
 import "./styles.css";
 import "./studio.css";
+import "./ui.css";
 if (import.meta.env.PROD && "serviceWorker" in navigator)
   void navigator.serviceWorker.register("/sw.js").catch(() => {});
 // A rendering error shows a way back instead of a blank window.

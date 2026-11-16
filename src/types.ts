@@ -28,6 +28,7 @@ export interface Clip {
   outline?: Outline;
   shareConfig?: ShareConfig;
   downloadAllowed?: boolean;
+  author?: string;
   cta?: { label: string; url: string };
   comments: Comment[];
   reactions: { emoji: string; count: number }[];
@@ -122,6 +123,7 @@ export async function api<T>(
     throw Object.assign(
       new Error(data.error || "Could not complete that request."),
       data,
+      { status: response.status },
     );
   return data;
 }
@@ -149,6 +151,7 @@ export interface Project {
     radius?: number;
     shadow?: number;
     preset?: "pip" | "side" | "screen" | "camera";
+    captionStyle?: "clean" | "bold" | "box" | "highlight";
     camera: {
       visible: boolean;
       x: number;
@@ -166,7 +169,17 @@ export interface Project {
   };
   overlays: {
     id: string;
-    type: "text" | "box" | "arrow" | "blur" | "zoom" | "cursor";
+    type:
+      | "text"
+      | "box"
+      | "arrow"
+      | "blur"
+      | "zoom"
+      | "cursor"
+      | "title"
+      | "lowerthird"
+      | "chapter";
+    sub?: string;
     start: number;
     end: number;
     x: number;
@@ -196,6 +209,7 @@ export interface Job {
 }
 export interface ProjectState {
   project: Project;
+  published?: Project;
   revision: number;
   canUndo: boolean;
   canRedo: boolean;

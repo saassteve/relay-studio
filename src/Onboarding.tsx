@@ -1,4 +1,6 @@
+import { radio, useDialog } from "./Modal";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   ArrowLeft,
   ArrowRight,
@@ -25,6 +27,8 @@ import { api, type Job, type BubbleSize } from "./types";
 import { defaults, savePreferences, type Preferences } from "./prefs";
 import { CameraLookPicker } from "./CameraLook";
 import "./onboarding.css";
+// A link to this computer only opens here, so setup doesn't promise one.
+const local = ["127.0.0.1", "localhost"].includes(location.hostname);
 
 type Step = "welcome" | "name" | "permissions" | "check" | "prefs" | "ready";
 type Permission =
@@ -95,9 +99,23 @@ export function Onboarding({
     addEventListener("keydown", key);
     return () => removeEventListener("keydown", key);
   });
-  return (
+  const dialog = useRef<HTMLDivElement>(null);
+  useDialog(dialog);
+  // Each step starts at its heading, so it is announced and Tab continues from there.
+  useEffect(() => {
+    const stage =
+      dialog.current?.querySelector<HTMLElement>(".onboarding-stage");
+    const heading = stage?.querySelector<HTMLElement>("h1");
+    if (!stage || !heading || stage.contains(document.activeElement)) return;
+    heading.tabIndex = -1;
+    heading.focus({ preventScroll: true });
+  }, [step]);
+  // Outside the app root, so the page behind is out of reach while this is open.
+  return createPortal(
     <div
+      ref={dialog}
       className="onboarding"
+      tabIndex={-1}
       role="dialog"
       aria-modal="true"
       aria-label="Set up Relay"
@@ -126,7 +144,12 @@ export function Onboarding({
         </ol>
         <p>
           Open source and local-first. Your recordings stay on this
-          {window.relayDesktop ? " Mac" : " server"} until you share them.
+          {window.relayDesktop
+            ? " Mac"
+            : ["127.0.0.1", "localhost"].includes(location.hostname)
+              ? " computer"
+              : " server"}{" "}
+          until you share them.
         </p>
       </aside>
       <main className="onboarding-stage" key={step}>
@@ -162,6 +185,7 @@ export function Onboarding({
               Your name
               <input
                 autoFocus
+                required
                 value={name}
                 maxLength={80}
                 onChange={(e) => setName(e.target.value)}
@@ -224,11 +248,19 @@ export function Onboarding({
               {name.trim() ? `, ${name.trim().split(" ")[0]}` : ""}.
             </h1>
             <p className="lede">
-              Press <kbd>⌥</kbd>
-              <kbd>⇧</kbd>
-              <kbd>R</kbd> from anywhere to record.
-              {window.relayDesktop &&
-                " Relay also lives in your menu bar, so it’s one click away."}
+              {window.relayDesktop ? (
+                <>
+                  Press <kbd>⌥</kbd>
+                  <kbd>⇧</kbd>
+                  <kbd>R</kbd> from anywhere to record. Relay also lives in your
+                  menu bar, so it’s one click away.
+                </>
+              ) : (
+                <>
+                  Press <kbd>R</kbd> in your library to start a recording at any
+                  time.
+                </>
+              )}
             </p>
             <div className="ready-actions">
               <button
@@ -253,7 +285,8 @@ export function Onboarding({
           </div>
         )}
       </main>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -297,8 +330,9 @@ function Welcome({
         <em>Keep it forever.</em>
       </h1>
       <p className="lede">
-        Record your screen, camera and voice, edit by deleting words, and send
-        one link. Relay does it on your own machine, with no plan limits.
+        Record your screen, camera and voice, edit by deleting words, and{" "}
+        {local ? "send the finished video" : "send one link"}. Relay does it on
+        your own machine, with no plan limits.
       </p>
       <div className="promise-grid">
         <div>
@@ -447,6 +481,7 @@ function Permissions({
               ) : (
                 <button
                   className="btn small primary"
+                  aria-label={`Allow ${title}`}
                   onClick={() => void request(kind)}
                 >
                   Allow
@@ -574,7 +609,9 @@ function DeviceCheck({
       .catch((e) =>
         setMicError(
           e.name === "NotAllowedError"
-            ? "Microphone access is off. Turn it on in Permissions to be heard."
+            ? window.relayDesktop
+              ? "Microphone access is off. Turn it on in Permissions to be heard."
+              : "Microphone access is off. Allow it for this site in your browser’s address bar."
             : "No microphone found.",
         ),
       );
@@ -694,14 +731,16 @@ function Choice<T extends string | number>({
   options: [T, string][];
   onChange: (v: T) => void;
 }) {
+  // One option is not a choice: just say what will happen.
+  if (options.length === 1)
+    return <span className="choice-only">{options[0][1]}</span>;
   return (
     <div className="choice" role="radiogroup" aria-label={label}>
       {options.map(([v, text]) => (
         <button
           key={String(v)}
           type="button"
-          role="radio"
-          aria-checked={value === v}
+          {...radio(value === v)}
           className={value === v ? "selected" : undefined}
           onClick={() => onChange(v)}
         >
@@ -779,19 +818,30 @@ function PrefsStep({
     <div className="onboarding-panel">
       <span className="eyebrow">STEP {index + 1}</span>
       <h1>Make it yours.</h1>
-      <p className="lede">Sensible defaults. Change any of them later.</p>
+      <p className="lede">
+        Sensible defaults. You can change them any time in Settings.
+      </p>
       <div className="pref-list">
         <div className="pref-row">
           <span>
             <strong>When I finish recording</strong>
-            <small>Paste the link anywhere. It plays while you polish.</small>
+            <small>
+              {local
+                ? "Open the editor to tidy it up, then download or share it."
+                : "Paste the link anywhere. It plays while you polish."}
+            </small>
           </span>
           <Choice
             label="When I finish recording"
-            value={v("afterRecording")}
+            value={local ? "open-editor" : v("afterRecording")}
             options={[
-              ["copy-link", "Copy link + open editor"],
-              ["open-editor", "Just open editor"],
+              ...(local
+                ? []
+                : ([["copy-link", "Copy link + open editor"]] as [
+                    "copy-link",
+                    string,
+                  ][])),
+              ["open-editor", local ? "Open the editor" : "Just open editor"],
             ]}
             onChange={(afterRecording) => update({ afterRecording })}
           />
@@ -910,6 +960,7 @@ function PrefsStep({
             <span
               className="ai-progress"
               role="progressbar"
+              aria-label="Downloading the transcription model"
               aria-valuenow={ai.progress}
               aria-valuemin={0}
               aria-valuemax={100}

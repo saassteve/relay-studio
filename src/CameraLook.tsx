@@ -1,3 +1,4 @@
+import { radio } from "./Modal";
 import { useEffect, useRef, useState } from "react";
 import { Ban, Camera, ImagePlus, LoaderCircle } from "lucide-react";
 import {
@@ -55,7 +56,7 @@ export function CameraLookPicker({
       .catch((e) =>
         setError(
           e?.name === "NotAllowedError"
-            ? "Camera access is off."
+            ? "Camera access is off. Allow it for this site in your browser’s address bar."
             : "No camera found.",
         ),
       );
@@ -100,13 +101,16 @@ export function CameraLookPicker({
       </div>
       <div className="look-options">
         <span className="look-label">Filter</span>
-        <div className="look-row" role="radiogroup" aria-label="Camera filter">
+        <div
+          className="look-row filters"
+          role="radiogroup"
+          aria-label="Camera filter"
+        >
           {FILTERS.map((f) => (
             <button
               type="button"
               key={f.id}
-              role="radio"
-              aria-checked={look.filter === f.id}
+              {...radio(look.filter === f.id)}
               className={`look-chip ${look.filter === f.id ? "selected" : ""}`}
               onClick={() =>
                 onChange({ ...look, filter: f.id as CameraFilter })
@@ -131,8 +135,7 @@ export function CameraLookPicker({
             <button
               type="button"
               key={b.id}
-              role="radio"
-              aria-checked={look.background === b.id}
+              {...radio(look.background === b.id)}
               aria-label={b.label}
               title={b.label}
               className={`bg-chip ${look.background === b.id ? "selected" : ""}`}
@@ -146,8 +149,7 @@ export function CameraLookPicker({
           {custom && (
             <button
               type="button"
-              role="radio"
-              aria-checked={look.background === "custom"}
+              {...radio(look.background === "custom")}
               aria-label="Your picture"
               title="Your picture"
               className={`bg-chip ${look.background === "custom" ? "selected" : ""}`}

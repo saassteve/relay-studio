@@ -1,0 +1,658 @@
+.draft-player {
+  border-radius: 16px;
+  overflow: hidden;
+  background: #0f1a15;
+  box-shadow: 0 12px 40px #173e3226;
+}
+.draft-canvas {
+  position: relative;
+  width: 100%;
+  margin: 0 auto;
+  overflow: hidden;
+  container-type: inline-size;
+  cursor: pointer;
+}
+.draft-box {
+  position: absolute;
+  overflow: hidden;
+  background: #0b1612;
+  transition:
+    left 0.45s cubic-bezier(0.3, 0.7, 0.2, 1),
+    top 0.45s cubic-bezier(0.3, 0.7, 0.2, 1),
+    width 0.45s cubic-bezier(0.3, 0.7, 0.2, 1),
+    height 0.45s cubic-bezier(0.3, 0.7, 0.2, 1),
+    border-radius 0.45s,
+    opacity 0.3s;
+}
+.draft-box video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.6s cubic-bezier(0.3, 0.7, 0.2, 1);
+}
+.draft-play {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 76px;
+  height: 76px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: #0f1a15cc;
+  color: #fff;
+  padding-left: 5px;
+  pointer-events: none;
+}
+/* Titles and captions approximate the rendered look; sizes follow the frame height. */
+.draft-title {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--h) * 0.02);
+  background: #10261ac7;
+  color: #fff;
+  text-align: center;
+  animation: draft-fade 0.35s ease-out;
+  pointer-events: none;
+}
+.draft-title i {
+  width: 6%;
+  height: calc(var(--h) * 0.008);
+  border-radius: 99px;
+}
+.draft-title strong {
+  font:
+    800 calc(var(--h) * 0.092) / 1.05 "Manrope",
+    sans-serif;
+  letter-spacing: -0.02em;
+  padding: 0 6%;
+}
+.draft-title span {
+  font:
+    400 calc(var(--h) * 0.036) / 1.3 "DM Sans",
+    sans-serif;
+  color: #ddefe6;
+}
+.draft-lower {
+  position: absolute;
+  left: 4.5%;
+  bottom: 7.5%;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: calc(var(--h) * 0.016);
+  padding: calc(var(--h) * 0.018) calc(var(--h) * 0.03) calc(var(--h) * 0.018)
+    calc(var(--h) * 0.014);
+  border-radius: calc(var(--h) * 0.018);
+  background: #173e32ee;
+  color: #fff;
+  animation: draft-slide 0.35s ease-out;
+  pointer-events: none;
+}
+.draft-lower i {
+  grid-row: 1 / span 2;
+  width: calc(var(--h) * 0.006);
+  border-radius: 99px;
+}
+.draft-lower strong {
+  font:
+    800 calc(var(--h) * 0.04) / 1.2 "Manrope",
+    sans-serif;
+}
+.draft-lower span {
+  font:
+    400 calc(var(--h) * 0.026) / 1.3 "DM Sans",
+    sans-serif;
+  color: #c3d1c6;
+}
+.draft-chapter {
+  position: absolute;
+  left: 4%;
+  top: 6%;
+  padding: calc(var(--h) * 0.012) calc(var(--h) * 0.03);
+  border-radius: 99px;
+  color: #173e32;
+  font:
+    800 calc(var(--h) * 0.03) / 1.3 "Manrope",
+    sans-serif;
+  animation: draft-fade 0.3s ease-out;
+  pointer-events: none;
+}
+.draft-caption {
+  position: absolute;
+  left: 6%;
+  right: 6%;
+  bottom: 7%;
+  text-align: center;
+  color: #fff;
+  pointer-events: none;
+  font:
+    500 calc(var(--h) * 0.044) / 1.25 "DM Sans",
+    sans-serif;
+  text-shadow:
+    0 0 calc(var(--h) * 0.006) #0b1610,
+    0 calc(var(--h) * 0.003) calc(var(--h) * 0.004) #0b1610;
+}
+.draft-caption b {
+  font-weight: inherit;
+}
+.draft-caption.bold {
+  font:
+    800 calc(var(--h) * 0.058) / 1.15 "Manrope",
+    sans-serif;
+  text-transform: uppercase;
+  -webkit-text-stroke: calc(var(--h) * 0.004) #101a12;
+  paint-order: stroke fill;
+}
+.draft-caption.box span {
+  background: #121f15d9;
+  padding: 0.15em 0.5em;
+  border-radius: 0.2em;
+  text-shadow: none;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.draft-caption.highlight {
+  bottom: 9%;
+  font:
+    800 calc(var(--h) * 0.062) / 1.15 "Manrope",
+    sans-serif;
+  -webkit-text-stroke: calc(var(--h) * 0.005) #101a12;
+  paint-order: stroke fill;
+}
+.draft-caption.highlight b.now {
+  color: var(--lime);
+}
+@keyframes draft-fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes draft-slide {
+  from {
+    opacity: 0;
+    transform: translateX(-3%);
+  }
+}
+.draft-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  color: #e9f0de;
+}
+.draft-controls .icon-button {
+  color: #e9f0de;
+}
+.draft-controls .icon-button:hover {
+  background: #ffffff1a;
+}
+.draft-time {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.draft-time span {
+  color: #9fb0a3;
+}
+.draft-scrub {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+}
+.draft-scrub input[type="range"] {
+  position: relative;
+  z-index: 1;
+}
+.draft-scrub input[type="range"]::-webkit-slider-runnable-track {
+  background: linear-gradient(
+    to right,
+    var(--lime) var(--played),
+    #ffffff33 var(--played)
+  );
+}
+.draft-scrub input[type="range"]::-webkit-slider-thumb {
+  border-color: var(--lime);
+  background: var(--lime);
+  width: 14px;
+  height: 14px;
+  margin-top: -4.5px;
+}
+/* Where one kept section ends and the next begins. */
+.draft-marks i {
+  position: absolute;
+  top: 50%;
+  width: 2px;
+  height: 11px;
+  margin-top: -5.5px;
+  background: #0f1a15;
+  z-index: 2;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .draft-box,
+  .draft-box video,
+  .draft-title,
+  .draft-lower,
+  .draft-chapter {
+    transition: none;
+    animation: none;
+  }
+}
+/* The shared watch page uses the same shell around the finished video. */
+.watch-player .video-player {
+  border-radius: 0;
+  background: #0b1612;
+  cursor: pointer;
+  max-height: 72vh;
+  width: 100%;
+}
+.watch-player video::cue {
+  font: 500 0.9em/1.3 "DM Sans", sans-serif;
+  background: #0f1a15d9;
+  color: #fff;
+}
+.watch-speed {
+  min-height: 32px !important;
+  padding: 4px 26px 4px 10px !important;
+  border: 1px solid #ffffff33 !important;
+  border-radius: 8px;
+  background-color: transparent !important;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23e9f0de' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") !important;
+  background-position: right 8px center !important;
+  color: #e9f0de !important;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  width: auto;
+}
+.watch-speed option {
+  color: #17251d;
+}
+.watch-player.is-full {
+  display: flex;
+  flex-direction: column;
+  border-radius: 0;
+}
+.watch-player.is-full .video-player {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  aspect-ratio: auto;
+}
+@media (max-width: 520px) {
+  .draft-controls {
+    gap: 4px;
+    padding: 6px 8px;
+  }
+  .watch-speed {
+    padding-right: 22px !important;
+  }
+}
+@media (max-width: 520px) {
+  .watch-player .draft-time span {
+    display: none;
+  }
+  .watch-speed {
+    width: 58px;
+    padding-left: 8px !important;
+  }
+}
+
+/* Effects drawn over the preview. Paused, they can be dragged into place. */
+.draft-fx {
+  position: absolute;
+  pointer-events: none;
+  user-select: none;
+  touch-action: none;
+}
+.draft-canvas.is-editing .draft-fx,
+.draft-canvas.is-editing .draft-fx-focus {
+  pointer-events: auto;
+  cursor: move;
+}
+.draft-canvas.is-editing .draft-fx {
+  outline: 1px dashed #ffffffcc;
+  outline-offset: 3px;
+}
+.draft-fx.text {
+  padding: calc(var(--h) * 0.009) calc(var(--h) * 0.012);
+  background: #0000008c;
+  font:
+    500 calc(var(--h) * 0.045) / 1.2 "DM Sans",
+    sans-serif;
+  white-space: pre;
+}
+.draft-fx.arrow {
+  font: 500 calc(var(--h) * 0.12) / 1 "DM Sans", sans-serif;
+}
+.draft-fx.cursor {
+  font: 500 calc(var(--h) * 0.037) / 1 "DM Sans", sans-serif;
+}
+.draft-fx.box {
+  border: calc(var(--h) * 0.004) solid currentColor;
+  opacity: 0.85;
+}
+.draft-fx.blur {
+  backdrop-filter: blur(calc(var(--h) * 0.014));
+  -webkit-backdrop-filter: blur(calc(var(--h) * 0.014));
+}
+.draft-fx-size {
+  position: absolute;
+  right: -7px;
+  bottom: -7px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid #17251d;
+  background: #fff;
+  cursor: nwse-resize;
+}
+.draft-fx-focus {
+  position: absolute;
+  width: 34px;
+  height: 34px;
+  margin: -17px 0 0 -17px;
+  border-radius: 50%;
+  border: 2px solid var(--lime);
+  background: #d6f47533;
+  box-shadow: 0 0 0 1px #17251d;
+  touch-action: none;
+}
+.draft-fx-focus::after {
+  content: "";
+  position: absolute;
+  inset: 13px;
+  border-radius: 50%;
+  background: var(--lime);
+}
+
+/* The preview and tabs stay in view while the tools scroll. */
+.preview-sentinel {
+  height: 1px;
+  margin-bottom: -1px;
+}
+.preview-dock {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--paper);
+}
+.preview-dock.is-stuck {
+  padding-top: 8px;
+  box-shadow: 0 10px 14px -12px #173e3233;
+}
+.preview-dock.is-stuck .draft-player {
+  width: min(100%, calc(34vh * var(--ratio, 1.778)));
+}
+.preview-dock.is-stuck .draft-player {
+  border-radius: 12px;
+}
+.preview-dock.is-stuck .studio-status {
+  padding: 6px 2px;
+}
+@media (max-width: 900px), (max-height: 640px) {
+  .preview-dock {
+    position: static;
+  }
+}
+
+/* As wide as fits, never taller than most of the window, always in proportion. */
+.draft-player {
+  width: min(100%, calc(66vh * var(--ratio, 1.778)));
+  margin: 0 auto;
+}
+.watch-player {
+  width: 100%;
+}
+
+/* ---- The stage: preview on top, the whole video as a timeline underneath. ---- */
+.stage {
+  border-radius: 16px;
+  overflow: hidden;
+  background: #0f1a15;
+  box-shadow: 0 12px 40px #173e3226;
+}
+.stage .draft-player {
+  width: 100%;
+  border-radius: 0;
+  box-shadow: none;
+  background: none;
+}
+.stage .draft-canvas {
+  width: min(100% - 28px, calc(52vh * var(--ratio, 1.778)));
+  margin: 14px auto 0;
+  border-radius: 8px;
+}
+.preview-dock.is-stuck .stage .draft-player {
+  width: 100%;
+}
+.preview-dock.is-stuck .stage .draft-canvas {
+  width: min(100% - 28px, calc(28vh * var(--ratio, 1.778)));
+  margin-top: 10px;
+}
+.draft-box.is-movable {
+  cursor: grab;
+  touch-action: none;
+}
+.draft-box.is-movable:active {
+  cursor: grabbing;
+}
+.timeline {
+  padding: 0 14px 12px;
+  color: #cfdccd;
+  user-select: none;
+}
+.timeline-area {
+  position: relative;
+  padding-top: 18px;
+  cursor: pointer;
+  touch-action: none;
+}
+.tl-ruler {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 16px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: #9fb0a3;
+  pointer-events: none;
+}
+.tl-ruler span {
+  position: absolute;
+  top: 0;
+  padding-left: 5px;
+  border-left: 1px solid #ffffff33;
+  line-height: 14px;
+  white-space: nowrap;
+}
+.tl-ruler span:last-child:not(:first-child) {
+  display: none;
+}
+.tl-track {
+  position: relative;
+  margin-top: 4px;
+  border-radius: 8px;
+  background: #ffffff10;
+}
+.tl-clips {
+  height: 32px;
+}
+.tl-clips button {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 6px;
+  padding: 0 8px;
+  border: 1.5px solid #0f1a15;
+  border-radius: 8px;
+  background: #35594a;
+  color: #eef5e3;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.tl-clips button:hover {
+  background: #3f6a57;
+}
+.tl-clips button.selected {
+  border-color: var(--lime);
+  background: #44705c;
+}
+.tl-bar {
+  position: absolute;
+  height: 24px;
+  min-width: 10px;
+  padding: 0 9px;
+  border-radius: 6px;
+  background: var(--lime);
+  color: #173e32;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+}
+.tl-bar:active {
+  cursor: grabbing;
+}
+.tl-bar span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tl-bar.track-1 {
+  background: #f1e3b0;
+  color: #4a3a08;
+}
+.tl-bar.track-2 {
+  background: #a9dcc8;
+  color: #0f3a2b;
+}
+.tl-edge {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 8px;
+  cursor: ew-resize;
+}
+.tl-edge.end {
+  left: auto;
+  right: 0;
+}
+.tl-edge::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 3px;
+  width: 2px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: 0.45;
+}
+.tl-now {
+  position: absolute;
+  top: 2px;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: #fff;
+  border-radius: 2px;
+  pointer-events: none;
+  z-index: 3;
+}
+.tl-now::before {
+  content: "";
+  position: absolute;
+  top: -2px;
+  left: -4px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #fff;
+}
+.preview-dock.is-stuck .tl-ruler {
+  display: none;
+}
+.preview-dock.is-stuck .timeline-area {
+  padding-top: 4px;
+}
+/* Pinned while scrolling: smaller picture, and the tracks scroll if there are many. */
+.preview-dock.is-stuck .stage .draft-canvas {
+  width: min(100% - 28px, calc(24vh * var(--ratio, 1.778)));
+}
+.preview-dock.is-stuck .timeline-area {
+  max-height: 96px;
+  overflow-y: auto;
+}
+.preview-dock.is-stuck .tl-now {
+  position: sticky;
+  display: none;
+}
+
+/* Timeline, second pass: named rows, bars you can always grab. */
+.timeline {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  column-gap: 8px;
+}
+.tl-names {
+  display: flex;
+  flex-direction: column;
+  font-size: 11px;
+  font-weight: 600;
+  color: #9fb0a3;
+}
+.tl-names span {
+  display: flex;
+  align-items: center;
+  margin-top: 4px;
+}
+.tl-names .tl-ruler-gap {
+  height: 18px;
+  margin-top: 0;
+}
+.tl-bar {
+  min-width: 28px;
+}
+.tl-edge {
+  width: 6px;
+}
+.tl-ruler span:first-child {
+  padding-left: 8px;
+}
+.preview-dock.is-stuck .timeline-area {
+  max-height: none;
+  overflow: visible;
+}
+.preview-dock.is-stuck .tl-bars,
+.preview-dock.is-stuck .tl-names span:nth-child(n + 3) {
+  display: none;
+}
+.preview-dock.is-stuck .tl-names .tl-ruler-gap {
+  height: 4px;
+}
+.preview-dock.is-stuck .tl-now {
+  display: block;
+  position: absolute;
+}
+@media (max-width: 700px) {
+  .timeline {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .tl-names {
+    display: none;
+  }
+}

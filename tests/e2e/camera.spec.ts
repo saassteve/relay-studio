@@ -45,7 +45,7 @@ test("camera looks: filters and on-device virtual backgrounds", async ({
   });
   await page.goto("/");
   await page.getByRole("button", { name: "New recording" }).first().click();
-  await page.getByRole("button", { name: "Camera only", exact: true }).click();
+  await page.getByRole("radio", { name: "Camera only", exact: true }).click();
   const preview = page.locator(".look-preview video");
   await expect
     .poll(() => preview.evaluate((v: HTMLVideoElement) => v.readyState))

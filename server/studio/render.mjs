@@ -1,5 +1,6 @@
 import { zoomFilter } from "./autozoom.mjs";
 import { createArtwork, planLayout } from "./compose.mjs";
+import { buildASS, TITLE_TYPES } from "./titles.mjs";
 
 // Splits a section into stretches that each use one layout.
 export function layoutPieces(scenes, offset, length, base) {
@@ -410,7 +411,8 @@ export function createRenderer({ db, dataDir, find }) {
         "rP2tp2ywxg089UriI5-g4vlH9VoD8CmcqZG40F9JadbnoEwARZthTg.ttf",
       );
       for (const effect of effects) {
-        if (effect.type === "zoom") continue;
+        if (effect.type === "zoom" || TITLE_TYPES.includes(effect.type))
+          continue;
         const target = next(),
           x = Math.round(effect.x * W),
           y = Math.round(effect.y * H),
@@ -443,17 +445,22 @@ export function createRenderer({ db, dataDir, find }) {
         }
         previous = target;
       }
-      if (l.captions) {
-        const words = outputWords(project, find);
-        if (words.length) {
-          const file = path.join(temp, "captions.srt");
-          writeFileSync(file, captions(words, "srt"));
-          const target = next();
-          vf.push(
-            `[${previous}]subtitles=filename='${filterPath(file)}':fontsdir='${filterPath(fontsDir)}':force_style='FontName=DM Sans,FontSize=22,Outline=2,MarginV=30'[${target}]`,
-          );
-          previous = target;
-        }
+      // Captions and titles are drawn together from one styled subtitle file.
+      const ass = buildASS({
+        width: W,
+        height: H,
+        words: l.captions ? outputWords(project, find) : [],
+        captionStyle: l.captions ? l.captionStyle || "clean" : null,
+        overlays: effects,
+      });
+      if (ass) {
+        const file = path.join(temp, "titles.ass");
+        writeFileSync(file, ass);
+        const target = next();
+        vf.push(
+          `[${previous}]subtitles=filename='${filterPath(file)}':fontsdir='${filterPath(fontsDir)}'[${target}]`,
+        );
+        previous = target;
       }
       if (vf.length) {
         const script = path.join(temp, "effects.filter");
@@ -526,7 +533,8 @@ export function createRenderer({ db, dataDir, find }) {
             "-frames:v",
             "1",
             "-vf",
-            "scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2",
+            // Fill the 16:9 card rather than letterboxing it.
+            "scale=640:360:force_original_aspect_ratio=increase,crop=640:360",
             "-f",
             "image2pipe",
             "-vcodec",

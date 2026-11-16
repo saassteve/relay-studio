@@ -65,7 +65,10 @@ test("capture, edit, export, share, comment, revoke; responsive library", async 
   await expect(
     setup.getByRole("heading", { name: "Make it yours." }),
   ).toBeVisible();
-  await setup.getByRole("radio", { name: "Just open editor" }).click();
+  // On this computer there is no link to copy, so setup just says what happens.
+  await expect(
+    setup.getByText("Open the editor", { exact: true }),
+  ).toBeVisible();
   await setup.getByRole("radio", { name: "3 sec" }).click();
   await page.screenshot({ path: "test-results/onboarding-prefs.png" });
   await setup.getByRole("button", { name: "Looks good" }).click();
@@ -75,7 +78,6 @@ test("capture, edit, export, share, comment, revoke; responsive library", async 
   // Reloading mid-way is safe; finishing persists on the server.
   const prefs = await (await page.request.get("/api/preferences")).json();
   expect(prefs).toMatchObject({
-    afterRecording: "open-editor",
     countdown: 3,
     onboardingStep: "ready",
   });
@@ -84,20 +86,18 @@ test("capture, edit, export, share, comment, revoke; responsive library", async 
   expect(
     (await (await page.request.get("/api/preferences")).json()).onboarded,
   ).toBe(true);
-  await expect(page.locator(".workspace-picker")).toContainText(
-    "Avery’s workspace",
-  );
+  await expect(page.locator(".profile-row")).toContainText("Avery");
   await page.reload();
   await expect(
-    page.getByRole("heading", { name: "Ideas worth sharing." }),
+    page.getByRole("heading", { name: "Library", level: 1 }),
   ).toBeVisible();
   await expect(setup).toBeHidden();
   await page.screenshot({
     path: "test-results/library-desktop.png",
     fullPage: true,
   });
-  await page.getByRole("button", { name: "New recording" }).click();
-  await page.getByRole("button", { name: "Screen only", exact: true }).click();
+  await page.getByRole("button", { name: "New recording" }).first().click();
+  await page.getByRole("radio", { name: "Screen only", exact: true }).click();
   await page.getByRole("button", { name: "Start recording" }).click();
   await expect(page.locator(".recorder-countdown")).toBeVisible();
   await expect(page.locator(".rec-live")).toContainText("Recording");
@@ -114,35 +114,60 @@ test("capture, edit, export, share, comment, revoke; responsive library", async 
   await page
     .getByRole("textbox", { name: "Video title" })
     .fill("A real capture test");
-  await page.getByRole("button", { name: "Save & edit" }).click();
+  await page.getByRole("button", { name: "Open in editor" }).click();
   await expect(page.getByRole("textbox", { name: "Video title" })).toHaveValue(
     "A real capture test",
     { timeout: 15000 },
   );
+  // The editor opens on a live preview of the video, straight from the recording.
   await expect
     .poll(() =>
       page
-        .locator(".video-player video")
+        .locator(".draft-box video")
+        .first()
         .evaluate((v: HTMLVideoElement) => v.readyState),
     )
     .toBeGreaterThan(1);
-  await page.getByRole("button", { name: "Notes", exact: true }).click();
+  await expect(page.locator(".save-state")).toHaveText("Video is up to date");
+  await page.getByRole("tab", { name: "Notes", exact: true }).click();
   await page
     .getByRole("textbox", { name: "Video notes" })
     .fill("Clear context, without the meeting.");
-  await page.getByRole("button", { name: "Save notes" }).click();
-  await expect(page.getByRole("button", { name: "Save notes" })).toBeDisabled();
-  await page.getByRole("button", { name: "Trim video" }).click();
-  await page.getByRole("spinbutton", { name: "Start seconds" }).fill(".5");
-  await page.getByRole("spinbutton", { name: "End seconds" }).fill("2");
-  await page.getByRole("button", { name: "Save trimmed copy" }).click();
+  // Notes save themselves when you click away.
+  await page.getByRole("textbox", { name: "Video notes" }).blur();
   await expect(
-    page.getByText("Trimmed copy saved to your library"),
-  ).toBeVisible({ timeout: 20000 });
-  await page.getByRole("button", { name: "Share video" }).click();
-  await expect(
-    page.getByRole("dialog", { name: "Share your video" }),
+    page.getByText(/^Saved\. Viewers see these notes/),
   ).toBeVisible();
+  // Trim the start: it saves by itself, and one button puts it in the video.
+  await page.getByLabel("Section start").fill("0.5");
+  await expect(page.locator(".save-state")).toHaveText(
+    /^Edits saved\. Update the video/,
+  );
+  await page.getByRole("button", { name: "Play", exact: true }).click();
+  await expect
+    .poll(() =>
+      page
+        .locator(".draft-box video")
+        .first()
+        .evaluate((v: HTMLVideoElement) => v.currentTime),
+    )
+    .toBeGreaterThan(0.7);
+  await page.getByRole("button", { name: "Pause", exact: true }).click();
+  await page.getByRole("button", { name: "Update video" }).click();
+  await expect(page.getByText(/Video updated/)).toBeVisible({ timeout: 60000 });
+  await expect(page.locator(".save-state")).toHaveText("Video is up to date");
+  await page.getByRole("button", { name: "Save as new video" }).click();
+  await expect(
+    page.getByText("Saved as a new video in your library"),
+  ).toBeVisible({ timeout: 60000 });
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  // On this computer the dialog leads with downloading; the share page sits below.
+  const send = page.getByRole("dialog", { name: "Send this video" });
+  await expect(send).toBeVisible();
+  await expect(
+    send.getByRole("link", { name: "Download video" }),
+  ).toBeVisible();
+  await send.getByText("Share page on this computer").click();
   const link = await page
     .getByRole("textbox", { name: "Share link" })
     .inputValue();
@@ -180,24 +205,27 @@ test("capture, edit, export, share, comment, revoke; responsive library", async 
     .fill("This works end to end.");
   await watch.getByRole("button", { name: "Post comment" }).click();
   await expect(watch.getByText("This works end to end.")).toBeVisible();
-  await watch.getByRole("button", { name: "💡", exact: true }).click();
+  await watch.getByRole("button", { name: /React with 💡/ }).click();
   await watch.screenshot({
     path: "test-results/shared-review.png",
     fullPage: true,
   });
-  await page.getByRole("button", { name: "Revoke link" }).click();
+  // Turning a link off asks first.
+  await page.getByRole("button", { name: "Turn off link" }).click();
+  await page
+    .getByRole("alertdialog", { name: "Turn off this link?" })
+    .getByRole("button", { name: "Turn off link" })
+    .click();
   await watch.reload();
   await expect(
-    watch.getByRole("heading", { name: "That link has left the chat." }),
+    watch.getByRole("heading", { name: "This video is no longer shared" }),
   ).toBeVisible();
   await guest.close();
-  await page.getByRole("button", { name: "Your library" }).click();
-  await expect(
-    page.getByRole("button", { name: "Watch A real capture test (trimmed)" }),
-  ).toBeVisible();
+  await page.getByRole("button", { name: "Library", exact: true }).click();
+  await expect(page.locator(".video-card")).toHaveCount(2);
   await page.getByRole("textbox", { name: "Search videos" }).fill("unfindable");
   await expect(
-    page.getByRole("heading", { name: "No videos found." }),
+    page.getByRole("heading", { name: "No videos match that search" }),
   ).toBeVisible();
   await page.getByRole("textbox", { name: "Search videos" }).fill("");
   await page.setViewportSize({ width: 390, height: 844 });

@@ -30,6 +30,25 @@ const ready = async (stream: MediaStream) => {
   await v.play();
   return v;
 };
+// Turns a browser refusal into words that say what to do about it.
+const refused = (device: "camera" | "microphone") => (e: unknown) => {
+  const err = e as Error;
+  if (err.name === "NotAllowedError" || err.name === "SecurityError")
+    throw Object.assign(
+      new Error(
+        `Relay can’t use your ${device}. Allow it for this site in your browser’s address bar, or record without it.`,
+      ),
+      { name: "DeviceRefused" },
+    );
+  if (err.name === "NotFoundError" || err.name === "OverconstrainedError")
+    throw Object.assign(
+      new Error(
+        `Relay couldn’t find that ${device}. Pick another one, or record without it.`,
+      ),
+      { name: "DeviceRefused" },
+    );
+  throw e;
+};
 export async function acquireCapture(
   mode: Mode,
   mic: boolean,
@@ -57,7 +76,7 @@ export async function acquireCapture(
   try {
     if (!navigator.mediaDevices)
       throw new Error(
-        "Recording needs HTTPS or localhost. Open Relay in a secure browser.",
+        "This address can’t record. Open Relay on a secure (https) address, or on this computer.",
       );
     let screen: MediaStream | undefined,
       camera: MediaStream | undefined,
@@ -74,16 +93,18 @@ export async function acquireCapture(
       owned.push(screen);
     }
     if (mode !== "screen") {
-      camera = await navigator.mediaDevices.getUserMedia({
-        video: {
-          ...(options.cameraId
-            ? { deviceId: { exact: options.cameraId } }
-            : {}),
-          width: { ideal: mode === "camera" ? quality : 1280 },
-          height: { ideal: mode === "camera" ? (quality * 9) / 16 : 720 },
-        },
-        audio: false,
-      });
+      camera = await navigator.mediaDevices
+        .getUserMedia({
+          video: {
+            ...(options.cameraId
+              ? { deviceId: { exact: options.cameraId } }
+              : {}),
+            width: { ideal: mode === "camera" ? quality : 1280 },
+            height: { ideal: mode === "camera" ? (quality * 9) / 16 : 720 },
+          },
+          audio: false,
+        })
+        .catch(refused("camera"));
       owned.push(camera);
       // Filters and backgrounds are applied live, so the recorded camera track
       // looks exactly like the preview.
@@ -94,15 +115,17 @@ export async function acquireCapture(
       }
     }
     if (mic) {
-      microphone = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          ...(options.microphoneId
-            ? { deviceId: { exact: options.microphoneId } }
-            : {}),
-          echoCancellation: true,
-          noiseSuppression: true,
-        },
-      });
+      microphone = await navigator.mediaDevices
+        .getUserMedia({
+          audio: {
+            ...(options.microphoneId
+              ? { deviceId: { exact: options.microphoneId } }
+              : {}),
+            echoCancellation: true,
+            noiseSuppression: true,
+          },
+        })
+        .catch(refused("microphone"));
       owned.push(microphone);
     }
     const originalScreen = screen;
@@ -111,7 +134,7 @@ export async function acquireCapture(
       screen?.getAudioTracks().some((t) => t.readyState === "ended")
     )
       throw new Error(
-        "System audio permission was denied. Enable System Audio Recording in macOS Privacy settings, or turn off system audio and try again.",
+        "Relay isn’t allowed to record computer sound. Turn on System Audio Recording for Relay in macOS Privacy settings, or untick “Record computer sound” and try again.",
       );
     if (screen && options.region) {
       const source = await ready(screen),

@@ -32,7 +32,7 @@
   padding: 16px;
 }
 .look-empty small {
-  font-size: 11px;
+  font-size: 13px;
   color: #c3d1c6;
 }
 .look-busy {
@@ -54,7 +54,7 @@
   min-width: 0;
 }
 .look-label {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
   color: #5d6b61;
 }
@@ -72,7 +72,7 @@
   border-radius: 99px;
   border: 1px solid var(--border);
   background: #fffffb;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 550;
   color: #4d5a50;
 }
@@ -98,7 +98,7 @@
   background: #f1f4ea;
   display: grid;
   place-items: center;
-  color: #6c786f;
+  color: #5c685f;
   outline: 2px solid transparent;
   outline-offset: 2px;
 }

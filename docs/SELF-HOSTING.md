@@ -52,9 +52,22 @@ The app then records into the server's library and its share links work everywhe
 
 Transcription uses Whisper and summaries use DistilBART, both through Transformers.js on the server's CPU. Models download on first use into `DATA_DIR/models` and then work offline. English tiny/base and multilingual tiny Whisper models are available. AI output is editable and can be wrong.
 
+## Bring your own AI
+
+An owner can connect one AI provider in **Settings → AI assistant**: Google Gemini, Groq or OpenRouter (free tiers), Claude, ChatGPT, or an Ollama server you run. Relay uses it to draft titles, descriptions, chapters and title cards, and to turn a video into a document.
+
+- The key is stored in the workspace database in `DATA_DIR` and is not sent back to the browser (only its last four characters are shown), so protect that folder and its backups.
+- A transcript goes to a hosted provider only when someone asks for a draft and confirms it. Ollama requests stay on your network.
+- No provider is contacted until one is connected.
+
 ## Integrations
 
-Workspace settings shows a bearer token for the read-only API and an MCP endpoint at `/mcp` with `search_videos`, `get_video_context` and `create_context_draft`, so AI agents can use your recordings as context. A configured webhook can be triggered per video. Relay never posts anywhere automatically.
+Settings shows a bearer token for the API and an MCP endpoint at `/mcp`. Assistants such as Claude and ChatGPT can use it to:
+
+- find and read your recordings: `search_videos`, `get_video_context`, `create_context_draft`
+- edit them: `get_project`, `edit_video` (cut, remove fillers and pauses, add titles and zooms, change layout, look and captions), `render_video` and `get_render_status`
+
+Edits made this way are saved as a draft you can undo; nothing is published until `render_video` is called. Treat the token like a password. A configured webhook can be triggered per video. Relay never posts anywhere automatically.
 
 ## Portability
 

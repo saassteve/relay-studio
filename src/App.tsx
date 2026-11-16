@@ -27,25 +27,24 @@ import {
   X,
 } from "lucide-react";
 import { Recorder } from "./Recorder";
+import { Logo } from "./Logo";
+import { createPortal } from "react-dom";
+import { Menu as MoreMenu, Modal, confirmDialog } from "./Modal";
 import { WorkspaceSettings, InvitationPage } from "./WorkspaceSettings";
 import { RecoveryCenter } from "./RecoveryCenter";
 import { startDraftSync } from "./drafts";
 import { Editor } from "./Editor";
 import { Onboarding, type OnboardingExit } from "./Onboarding";
-import { loadPreferences, preferencesLoaded, type Preferences } from "./prefs";
+import {
+  loadPreferences,
+  pref,
+  preferencesLoaded,
+  type Preferences,
+} from "./prefs";
 import { createDemo, inspectVideo } from "./media";
 import { api, bytes, clock, type Clip } from "./types";
-function Logo() {
-  return (
-    <span className="wordmark">
-      <svg viewBox="0 0 34 36" aria-hidden="true">
-        <path d="M3 3h13a15 15 0 0 1 0 30H3V3Z" fill="currentColor" />
-        <path d="m12 11 12 7-12 7Z" fill="#f8f9f3" />
-      </svg>
-      relay
-    </span>
-  );
-}
+// The shortcut key people actually have on their keyboard.
+const mod = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl";
 export default function App() {
   const [path, setPath] = useState(location.pathname),
     [clips, setClips] = useState<Clip[]>([]),
@@ -70,6 +69,7 @@ export default function App() {
     [mobile, setMobile] = useState(false),
     [password, setPassword] = useState(""),
     [help, setHelp] = useState(false),
+    [gone, setGone] = useState(false),
     [shareGate, setShareGate] = useState<{
       requiresPassword?: boolean;
       requiresLogin?: boolean;
@@ -90,6 +90,15 @@ export default function App() {
     history.pushState({}, "", p);
     setPath(p);
     window.scrollTo(0, 0);
+    // Start the new page at its heading, for keyboards and screen readers.
+    setTimeout(() => {
+      const heading = document.querySelector<HTMLElement>(
+        "#root h1, #root main",
+      );
+      if (!heading) return;
+      if (!heading.hasAttribute("tabindex")) heading.tabIndex = -1;
+      heading.focus({ preventScroll: true });
+    }, 60);
   }, []);
   // Toasts stack so a background event never hides the confirmation you just asked for.
   const notify = useCallback((text: string) => {
@@ -97,17 +106,20 @@ export default function App() {
     setToasts((all) =>
       [...all.filter((t) => t.text !== text), { id, text }].slice(-3),
     );
-    setTimeout(() => setToasts((all) => all.filter((t) => t.id !== id)), 4000);
+    setTimeout(() => setToasts((all) => all.filter((t) => t.id !== id)), 6000);
   }, []);
-  const toastStack = toasts.length > 0 && (
-    <div className="toast-stack">
+  // Always mounted, so screen readers reliably announce each message.
+  // It lives outside the app root so it is still announced while a dialog is open.
+  const toastStack = createPortal(
+    <div className="toast-stack" role="status" aria-live="polite">
       {toasts.map((t) => (
-        <div className="toast" role="status" key={t.id}>
+        <div className="toast" key={t.id}>
           <Check size={17} />
           {t.text}
         </div>
       ))}
-    </div>
+    </div>,
+    document.body,
   );
   const canEdit = session?.member?.role !== "viewer";
   function requestRecording() {
@@ -157,6 +169,16 @@ export default function App() {
       }),
     [],
   );
+  // Other screens can ask for Settings, optionally at a section.
+  const [settingsFocus, setSettingsFocus] = useState("");
+  useEffect(() => {
+    const openSettings = (e: Event) => {
+      setSettingsFocus(String((e as CustomEvent).detail || ""));
+      setDialog("settings");
+    };
+    addEventListener("relay:open-settings", openSettings);
+    return () => removeEventListener("relay:open-settings", openSettings);
+  }, []);
   async function openOnboarding() {
     setPrefs(await loadPreferences(true));
     setDialog("");
@@ -209,6 +231,8 @@ export default function App() {
       } catch (e) {
         if (!cancelled) {
           setError((e as Error).message);
+          // Only a missing or expired link means "no longer shared".
+          setGone([404, 410].includes((e as { status?: number }).status ?? 0));
           if (token)
             setShareGate(
               e as { requiresPassword?: boolean; requiresLogin?: boolean },
@@ -232,8 +256,17 @@ export default function App() {
       if ((e.target as HTMLElement).closest("input,textarea,select")) return;
       if (
         e.key.toLowerCase() === "r" &&
+        pref("keyShortcuts") &&
         !e.metaKey &&
         !e.ctrlKey &&
+        !e.altKey &&
+        !e.shiftKey &&
+        !e.repeat &&
+        // Only from the page itself: never while a dialog is open or a control has focus.
+        !document.querySelector('[role="dialog"]') &&
+        !(e.target as HTMLElement).closest(
+          'button,a,summary,[role],[contenteditable="true"]',
+        ) &&
         !onboarding &&
         !token &&
         session?.unlocked &&
@@ -254,6 +287,27 @@ export default function App() {
     [canEdit],
   );
   const open = (c: Clip) => navigate(`/video/${c.id}`);
+  const removeClip = async (c: Clip) => {
+    if (
+      !(await confirmDialog({
+        title: "Delete this video?",
+        body: `“${c.title}”, its comments and its share link will be permanently deleted.`,
+        confirm: "Delete video",
+        cancel: "Keep video",
+        destructive: true,
+      }))
+    )
+      return;
+    try {
+      await api(`/api/videos/${c.id}`, { method: "DELETE" });
+      setClips((old) => old.filter((v) => v.id !== c.id));
+      notify("Video deleted");
+      // The card is gone; put the keyboard back at the top of the list.
+      setTimeout(() => document.getElementById("main")?.focus(), 80);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
   useEffect(() => {
     const update = () => void refresh().catch(() => {});
     addEventListener("relay:library", update);
@@ -263,11 +317,7 @@ export default function App() {
     setRecord(false);
     setClips((old) => [c, ...old.filter((v) => v.id !== c.id)]);
     open(c);
-    notify(
-      copied
-        ? "Link copied. Paste it anywhere while you polish."
-        : "Recording saved. Make it yours.",
-    );
+    notify(copied ? "Recording saved. Share link copied." : "Recording saved.");
   };
   const update = (c: Clip) => {
     setClips((old) =>
@@ -372,38 +422,80 @@ export default function App() {
     );
   const sectionTitle =
     section === "starred"
-      ? "The good stuff."
+      ? "Starred"
       : section === "shared"
-        ? "Out in the world."
+        ? "Shared links"
         : section.startsWith("folder:")
           ? section.slice(7)
-          : "Your video library";
+          : "Library";
+  // A brand-new library shows one welcome panel instead of an empty list.
+  const firstRun =
+    section === "library" && !query && !loading && clips.length === 0;
+  // The phone menu behaves like a dialog: focus moves in, the page behind is inert,
+  // and focus goes back to the menu button when it closes.
+  const drawer = useRef<HTMLElement>(null),
+    shell = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!mobile) return;
+    const opener = document.activeElement as HTMLElement | null;
+    if (shell.current) shell.current.inert = true;
+    drawer.current?.querySelector<HTMLElement>("button")?.focus();
+    return () => {
+      if (shell.current) shell.current.inert = false;
+      opener?.focus?.();
+    };
+  }, [mobile]);
+  // Each view names itself in the tab title.
+  useEffect(() => {
+    if (path.startsWith("/video/")) return;
+    // Shared pages name their state until the video itself sets the title.
+    if (path.startsWith("/s/") || path.startsWith("/embed/")) {
+      if (!active)
+        document.title = `${
+          loading
+            ? "Loading"
+            : shareGate?.requiresLogin
+              ? "Sign in to watch"
+              : shareGate?.requiresPassword
+                ? "Password required"
+                : "Video unavailable"
+        } · Relay`;
+      return;
+    }
+    document.title = `${
+      path.startsWith("/invite/")
+        ? "Join the workspace"
+        : session && !session.unlocked
+          ? "Sign in"
+          : sectionTitle
+    } · Relay`;
+  }, [path, sectionTitle, session, active, loading, shareGate]);
   const changeSection = (s: string) => {
     setSection(s);
     setMobile(false);
     setQuery("");
     if (path !== "/") navigate("/");
   };
+  // Closing mid-recording asks first; the recorder supplies the question.
+  const recorderGuard = useRef<() => Promise<boolean>>(async () => true);
+  const closeRecorder = () =>
+    void recorderGuard.current().then((ok) => ok && setRecord(false));
   const recorderModal = record && session?.member?.role !== "viewer" && (
     // Keyed and rendered at the same place in every view, so navigating
     // (for example Back) never unmounts a recording in progress.
-    <div key="recorder" className="dialog-backdrop recorder-backdrop">
-      <section
-        className="dialog recorder-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-label="New recording"
-      >
-        <button
-          className="dialog-close icon-button"
-          aria-label="Close recorder"
-          onClick={() => setRecord(false)}
-        >
-          <X size={21} />
-        </button>
-        <Recorder onClose={() => setRecord(false)} onSaved={saved} />
-      </section>
-    </div>
+    <Modal
+      key="recorder"
+      label="New recording"
+      className="recorder-dialog"
+      onClose={closeRecorder}
+      dismissOnBackdrop={false}
+    >
+      <Recorder
+        onClose={() => setRecord(false)}
+        onSaved={saved}
+        guard={recorderGuard}
+      />
+    </Modal>
   );
   if (path.startsWith("/invite/"))
     return <InvitationPage token={path.slice(8)} />;
@@ -426,12 +518,21 @@ export default function App() {
           notify={notify}
         />
         {recorderModal}
+        {dialog === "settings" && (
+          <Modal
+            label="Settings"
+            className="settings-dialog"
+            onClose={() => setDialog("")}
+          >
+            <WorkspaceSettings notify={notify} focus={settingsFocus} />
+          </Modal>
+        )}
         {toastStack}
       </>
     );
   if (token)
     return (
-      <div className="loading-page">
+      <main className="loading-page">
         {loading ? (
           <LoaderCircle className="spin" />
         ) : (
@@ -463,11 +564,11 @@ export default function App() {
                   }
                 }}
               >
-                <h2>
+                <h1>
                   {shareGate.requiresLogin
-                    ? "A video for your workspace."
-                    : "A little privacy."}
-                </h2>
+                    ? "Sign in to watch"
+                    : "This video is password-protected"}
+                </h1>
                 <p className="muted">
                   {shareGate.requiresLogin
                     ? "Sign in with your invited workspace account."
@@ -508,20 +609,34 @@ export default function App() {
               </form>
             ) : (
               <>
-                <h2>That link has left the chat.</h2>
-                <p>{error}</p>
-                <button className="btn" onClick={() => navigate("/")}>
-                  Go to Relay
-                </button>
+                {gone ? (
+                  <>
+                    <h1>This video is no longer shared</h1>
+                    <p className="muted">
+                      The link was turned off or has expired. Ask the person who
+                      sent it for a new one.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <h1>This video didn’t load</h1>
+                    <p className="muted">
+                      Check your connection and try again.
+                    </p>
+                    <button className="btn" onClick={() => location.reload()}>
+                      Try again
+                    </button>
+                  </>
+                )}
               </>
             )}
           </>
         )}
-      </div>
+      </main>
     );
   if (session && !session.unlocked)
     return (
-      <div className="login-page">
+      <main className="login-page">
         <div className="login-art">
           <Logo />
           <h1>
@@ -566,7 +681,7 @@ export default function App() {
           }}
         >
           <Lock size={26} />
-          <h2>Welcome back.</h2>
+          <h2>Sign in</h2>
           <p className="muted">Unlock your Relay workspace.</p>
           <label className="field">
             Email
@@ -596,16 +711,30 @@ export default function App() {
             </div>
           )}
           <button className="btn primary">
-            Let’s go
+            Sign in
             <ArrowRight size={17} />
           </button>
         </form>
-      </div>
+      </main>
     );
   return (
     <>
       <div key="shell" className="app-shell">
-        <aside className={`sidebar ${mobile ? "is-open" : ""}`}>
+        <a className="skip-link" href="#main">
+          Skip to videos
+        </a>
+        <aside
+          className={`sidebar ${mobile ? "is-open" : ""}`}
+          ref={drawer}
+          aria-label="Sidebar"
+        >
+          <button
+            className="icon-button drawer-close"
+            aria-label="Close navigation"
+            onClick={() => setMobile(false)}
+          >
+            <X size={20} />
+          </button>
           <button
             className="brand-button"
             aria-label="Relay home"
@@ -613,35 +742,15 @@ export default function App() {
           >
             <Logo />
           </button>
-          <button
-            className="workspace-picker"
-            onClick={() => setDialog("workspace")}
-          >
-            <span className="workspace-avatar">
-              {initial}
-              <span />
-            </span>
-            <span>
-              <strong>
-                {memberName && memberName !== "Workspace owner"
-                  ? `${memberName.split(" ")[0]}’s workspace`
-                  : "My workspace"}
-              </strong>
-              <small>
-                {window.relayDesktop ? "On this Mac" : "Personal space"}
-              </small>
-            </span>
-            <ChevronDown size={15} />
-          </button>
           <button className="new-recording" onClick={() => requestRecording()}>
             <span className="record-dot" />
             New recording<kbd>R</kbd>
           </button>
           <div className="nav-label">WORKSPACE</div>
-          <nav>
+          <nav aria-label="Library">
             {(
               [
-                ["library", "My library", Clapperboard],
+                ["library", "Library", Clapperboard],
                 ["starred", "Starred", Star],
                 ["shared", "Shared links", Link],
               ] as const
@@ -649,32 +758,25 @@ export default function App() {
               <button
                 key={s as string}
                 className={section === s ? "active" : ""}
+                aria-current={section === s ? "page" : undefined}
                 onClick={() => changeSection(s as string)}
               >
                 <Icon size={18} />
                 <span>{label as string}</span>
-                {s === "library" && (
+                {s === "library" && clips.length > 0 && (
                   <span className="nav-count">{clips.length}</span>
                 )}
               </button>
             ))}
           </nav>
-          <div className="nav-label collection-label">
-            COLLECTIONS{" "}
-            <button
-              className="icon-button"
-              aria-label="Create collection"
-              onClick={() => setDialog("collection")}
-            >
-              <Plus size={15} />
-            </button>
-          </div>
-          <nav className="folders">
+          <div className="nav-label">COLLECTIONS</div>
+          <nav className="folders" aria-label="Collections">
             {folders.length ? (
               folders.map((f) => (
                 <button
                   key={f}
                   className={section === `folder:${f}` ? "active" : ""}
+                  aria-current={section === `folder:${f}` ? "page" : undefined}
                   onClick={() => changeSection(`folder:${f}`)}
                 >
                   <Folder size={17} />
@@ -682,83 +784,63 @@ export default function App() {
                 </button>
               ))
             ) : (
-              <button
-                className="empty-folder"
-                onClick={() => setDialog("collection")}
-              >
-                <Folder size={17} />
-                <span>Make room for ideas</span>
-              </button>
+              <p className="nav-hint">
+                To group videos, open one, choose ⋯ and give it a collection.
+              </p>
             )}
           </nav>
           <div className="sidebar-bottom">
-            <div className="ownership-card">
-              <div>
-                <Code2 size={18} />
-                <span>Open source. All yours.</span>
-              </div>
-              <p>
-                Great ideas deserve
-                <br />a space of their own.
-              </p>
-              <button onClick={() => setDialog("about")}>
-                Meet Relay
-                <ArrowUpRight size={15} />
-              </button>
-            </div>
-            <button
-              className="sidebar-link"
-              onClick={() => setDialog("settings")}
-            >
-              <Settings size={17} />
-              Workspace settings
-            </button>
             <button
               className="profile-row"
-              onClick={() => setDialog("workspace")}
+              aria-label={`${memberName || "Your workspace"}, Settings`}
+              onClick={() => setDialog("settings")}
             >
-              <span className="avatar owner">{initial}</span>
+              <span className="avatar owner" aria-hidden="true">
+                {initial}
+              </span>
               <span>
                 <strong>{memberName || "Your workspace"}</strong>
-                <small>Make yourself at home.</small>
+                <small>
+                  {session?.member?.role === "viewer"
+                    ? "Viewer"
+                    : session?.member?.role === "editor"
+                      ? "Editor"
+                      : window.relayDesktop
+                        ? "On this Mac"
+                        : "Owner"}
+                </small>
               </span>
-              <MoreHorizontal size={18} />
+              <Settings size={17} />
             </button>
           </div>
         </aside>
         {mobile && (
           <div className="mobile-scrim" onClick={() => setMobile(false)} />
         )}
-        <div className="main-shell">
+        <div className="main-shell" ref={shell}>
           <header className="topbar">
             <button
               className="icon-button mobile-menu"
               aria-label="Open navigation"
+              aria-expanded={mobile}
               onClick={() => setMobile(true)}
             >
               <Menu size={21} />
             </button>
-            <div className="breadcrumb">
-              Workspace
-              <ChevronRight size={14} />
-              <span>
-                {section === "library"
-                  ? "My library"
-                  : section === "starred"
-                    ? "Starred"
-                    : section === "shared"
-                      ? "Shared links"
-                      : section.slice(7)}
-              </span>
-            </div>
+            <label className="search-box" hidden={firstRun}>
+              <Search size={16} />
+              <input
+                ref={search}
+                aria-label="Search videos"
+                placeholder="Search videos"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+              <kbd>{mod}K</kbd>
+            </label>
+            <span className="topbar-spacer" />
             <div className="topbar-right">
               <RecoveryCenter onOpen={open} notify={notify} />
-              <span className="local-badge">
-                <span className="tiny-dot" />
-                {window.relayDesktop
-                  ? "Desktop studio"
-                  : "Your own little corner"}
-              </span>
               <button
                 className="icon-button"
                 aria-label="Help"
@@ -766,40 +848,33 @@ export default function App() {
               >
                 <HelpCircle size={19} />
               </button>
-              <button
-                className="avatar owner"
-                aria-label="Your workspace"
-                onClick={() => setDialog("workspace")}
-              >
-                {initial}
-              </button>
             </div>
           </header>
-          <main className="library-main">
+          <main className="library-main" id="main" tabIndex={-1}>
             <div className="page-intro">
-              <div>
-                <div className="eyebrow">LESS MEETING. MORE MEANING.</div>
-                <h1>
-                  {section === "library"
-                    ? "Ideas worth sharing."
-                    : sectionTitle}
-                </h1>
-                <p>Show the work. Share the thinking. Keep things moving.</p>
+              <h1>{sectionTitle}</h1>
+              <div className="actions" hidden={firstRun}>
+                <button className="btn" onClick={() => input.current?.click()}>
+                  <Upload size={16} />
+                  Upload
+                </button>
+                <button
+                  className="btn primary phone-only"
+                  onClick={() => requestRecording()}
+                >
+                  <span className="record-dot" />
+                  New recording
+                </button>
               </div>
-              <button
-                className="btn import-btn"
-                onClick={() => input.current?.click()}
-              >
-                <Upload size={16} />
-                Upload video
-              </button>
             </div>
-            {section === "library" && !query && (
+            {error && firstRun && (
+              <div className="error" role="alert">
+                {error}
+              </div>
+            )}
+            {firstRun && (
               <section className="hero">
                 <div className="hero-copy">
-                  <span className="hero-tag">
-                    <span className="tiny-dot" />A LITTLE VIDEO GOES A LONG WAY
-                  </span>
                   <h2>
                     Big ideas.
                     <br />
@@ -815,11 +890,24 @@ export default function App() {
                     onClick={() => requestRecording()}
                   >
                     <span className="record-dot" />
-                    Let’s record something
+                    Record your first video
                     <ArrowUpRight size={18} />
                   </button>
                   <span className="hero-footnote">
-                    Your screen. Your voice. No big production.
+                    <button
+                      className="text-button"
+                      disabled={!!busy}
+                      onClick={() => void demo()}
+                    >
+                      Try a sample video
+                    </button>
+                    <span aria-hidden="true">·</span>
+                    <button
+                      className="text-button"
+                      onClick={() => input.current?.click()}
+                    >
+                      Upload a video
+                    </button>
                   </span>
                 </div>
                 <div className="hero-illustration" aria-hidden="true">
@@ -875,54 +963,12 @@ export default function App() {
                 </div>
               </section>
             )}
-            <section className="library-section">
-              <div className="section-heading">
-                <div className="library-title">
-                  <h2>
-                    {section === "library"
-                      ? "Your library"
-                      : section === "starred"
-                        ? "Starred videos"
-                        : section === "shared"
-                          ? "Shared videos"
-                          : section.slice(7)}
-                  </h2>
-                  <span className="count-pill">{filtered.length}</span>
-                </div>
-                <button
-                  className="text-button muted small"
-                  onClick={() => setDialog("collection")}
-                >
-                  <Folder size={16} />
-                  Organize a little
-                  <Plus size={14} />
-                </button>
-              </div>
+            <section className="library-section" hidden={firstRun}>
               <div className="library-toolbar">
-                <div className="library-tabs">
-                  <button className="active">
-                    {section === "shared" ? "Shared links" : "All videos"}
-                  </button>
-                  <span>
-                    {section === "library"
-                      ? "A home for your point of view."
-                      : section === "starred"
-                        ? "The ones worth keeping close."
-                        : "Every link has a little context."}
-                  </span>
-                </div>
+                <span className="library-count" role="status">
+                  {filtered.length} {filtered.length === 1 ? "video" : "videos"}
+                </span>
                 <div className="filter-tools">
-                  <label className="search-box">
-                    <Search size={16} />
-                    <input
-                      ref={search}
-                      aria-label="Search videos"
-                      placeholder="Find a video…"
-                      value={query}
-                      onChange={(e) => setQuery(e.target.value)}
-                    />
-                    <kbd>⌘ K</kbd>
-                  </label>
                   <select
                     className="sort"
                     aria-label="Sort videos"
@@ -937,6 +983,7 @@ export default function App() {
                   <div className="view-toggle">
                     <button
                       className={layout === "grid" ? "active" : ""}
+                      aria-pressed={layout === "grid"}
                       aria-label="Grid view"
                       onClick={() => setLayout("grid")}
                     >
@@ -944,6 +991,7 @@ export default function App() {
                     </button>
                     <button
                       className={layout === "list" ? "active" : ""}
+                      aria-pressed={layout === "list"}
                       aria-label="List view"
                       onClick={() => setLayout("list")}
                     >
@@ -969,7 +1017,7 @@ export default function App() {
               {loading ? (
                 <div className="empty-state">
                   <LoaderCircle className="spin" />
-                  <h3>Getting your ideas together…</h3>
+                  <h2>Loading your videos…</h2>
                 </div>
               ) : filtered.length ? (
                 <div
@@ -980,10 +1028,10 @@ export default function App() {
                       <button
                         className="thumbnail"
                         onClick={() => open(c)}
-                        aria-label={`Watch ${c.title}`}
+                        aria-label={`Watch ${c.title}, ${clock(c.duration)}${c.token ? ", shared" : ""}`}
                       >
                         {c.thumbnail ? (
-                          <img src={c.thumbnail} alt="" />
+                          <img src={c.thumbnail} alt="" loading="lazy" />
                         ) : (
                           <div className="fallback-thumbnail">
                             <PlayMark />
@@ -1012,7 +1060,9 @@ export default function App() {
                             })}
                           </span>
                           <span>·</span>
-                          <span>{c.views} views</span>
+                          <span>
+                            {c.views} {c.views === 1 ? "view" : "views"}
+                          </span>
                           <button
                             aria-label={
                               c.starred
@@ -1040,6 +1090,49 @@ export default function App() {
                               fill={c.starred ? "currentColor" : "none"}
                             />
                           </button>
+                          {canEdit && (
+                            <MoreMenu
+                              label={`More options for ${c.title}`}
+                              className="card-menu"
+                            >
+                              <button
+                                className="menu-item"
+                                data-close
+                                onClick={() => open(c)}
+                              >
+                                Open
+                              </button>
+                              <a
+                                className="menu-item"
+                                data-close
+                                href={`/api/media/${c.id}?download=1`}
+                              >
+                                Download
+                              </a>
+                              {c.token && (
+                                <button
+                                  className="menu-item"
+                                  data-close
+                                  onClick={() =>
+                                    void navigator.clipboard
+                                      .writeText(
+                                        `${location.origin}/s/${c.token}`,
+                                      )
+                                      .then(() => notify("Share link copied"))
+                                  }
+                                >
+                                  Copy share link
+                                </button>
+                              )}
+                              <button
+                                className="menu-item danger"
+                                data-close
+                                onClick={() => void removeClip(c)}
+                              >
+                                Delete
+                              </button>
+                            </MoreMenu>
+                          )}
                         </div>
                         {c.folder && (
                           <span className="card-folder">
@@ -1057,20 +1150,20 @@ export default function App() {
                     <Clapperboard size={28} strokeWidth={1.2} />
                     <span>✦</span>
                   </div>
-                  <h3>
+                  <h2>
                     {query
-                      ? "No videos found."
+                      ? "No videos match that search"
                       : section === "library"
-                        ? "Your next good idea goes here."
+                        ? "No videos yet"
                         : section === "starred"
-                          ? "Save a little inspiration."
-                          : "Nothing here just yet."}
-                  </h3>
+                          ? "No starred videos"
+                          : "Nothing here yet"}
+                  </h2>
                   <p>
                     {query
                       ? "Try another title, note, or collection."
                       : section === "library"
-                        ? "A quick update. A big reveal. That thing that’s easier to show."
+                        ? "Record your screen, your camera or both. Your videos appear here."
                         : section === "starred"
                           ? "Star a video in your library to keep it close."
                           : "Share a video or add it to this collection to get started."}
@@ -1082,14 +1175,14 @@ export default function App() {
                         onClick={() => requestRecording()}
                       >
                         <Plus size={17} />
-                        Make your first video
+                        Record a video
                       </button>
                       <button
                         className="text-button"
                         disabled={!!busy}
                         onClick={() => void demo()}
                       >
-                        Explore a sample
+                        Try a sample video
                         <ArrowUpRight size={15} />
                       </button>
                     </div>
@@ -1097,99 +1190,12 @@ export default function App() {
                 </div>
               )}
             </section>
-            {section === "library" && !query && (
-              <section className="inspiration">
-                <div className="section-heading">
-                  <div>
-                    <span className="eyebrow">A LITTLE INSPIRATION</span>
-                    <h2>There’s a video for that.</h2>
-                  </div>
-                  <span className="muted small">
-                    One less meeting, one good idea at a time.
-                  </span>
-                </div>
-                <div className="prompt-grid">
-                  {[
-                    [
-                      "update",
-                      "The “quick update”",
-                      "Keep everyone in the loop. In your own time.",
-                      "01",
-                    ],
-                    [
-                      "walkthrough",
-                      "The “let me show you”",
-                      "Give a great idea the context it deserves.",
-                      "02",
-                    ],
-                    [
-                      "feedback",
-                      "The “one small thing”",
-                      "Make your feedback clear. And a little kinder.",
-                      "03",
-                    ],
-                  ].map(([kind, title, desc, num]) => (
-                    <button
-                      className={`prompt-card ${kind}`}
-                      key={kind}
-                      onClick={() => requestRecording()}
-                    >
-                      <div className="prompt-art">
-                        {kind === "update" ? (
-                          <div className="art-update">
-                            <span>MONDAY, MADE SIMPLE</span>
-                            <i />
-                            <i />
-                            <i />
-                            <b>✓</b>
-                          </div>
-                        ) : kind === "walkthrough" ? (
-                          <div className="art-walk">
-                            <span>
-                              hello,
-                              <br />
-                              <em>good idea.</em>
-                            </span>
-                            <i>↗</i>
-                          </div>
-                        ) : (
-                          <div className="art-feedback">
-                            <div>
-                              <span>💬</span>What if we tried…
-                            </div>
-                            <i>✳</i>
-                          </div>
-                        )}
-                        <span className="prompt-number">{num}</span>
-                      </div>
-                      <div className="prompt-copy">
-                        <h3>
-                          {title}
-                          <ArrowUpRight size={17} />
-                        </h3>
-                        <p>{desc}</p>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </section>
-            )}
-            <footer className="main-footer">
-              <span>
-                <span className="tiny-dot" />
-                Made for people. Built in the open.
-              </span>
-              <span>
-                Less meeting. More meaning.{" "}
-                <span className="footer-spark">✳</span>
-              </span>
-            </footer>
           </main>
         </div>
         <input
           type="file"
           ref={input}
-          accept="video/mp4,video/webm,.relay"
+          accept="video/mp4,video/webm,video/quicktime,.mov,.relay"
           hidden
           onChange={(e) => {
             const f = e.target.files?.[0];
@@ -1209,120 +1215,116 @@ export default function App() {
           />
         )}
         {(dialog || help) && (
-          <div
-            className="dialog-backdrop"
-            onClick={() => {
+          <Modal
+            label={help ? "Help" : "Settings"}
+            className={help ? "info-dialog" : "settings-dialog"}
+            onClose={() => {
               setDialog("");
               setHelp(false);
             }}
           >
-            <section
-              className="dialog info-dialog"
-              role="dialog"
-              aria-modal="true"
-              aria-label={help ? "Help" : dialog}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <button
-                className="dialog-close icon-button"
-                aria-label="Close dialog"
-                onClick={() => {
-                  setDialog("");
-                  setHelp(false);
-                }}
-              >
-                <X size={21} />
-              </button>
-              {dialog === "collection" ? (
-                <>
-                  <Folder size={27} />
-                  <h2>A little organization.</h2>
-                  <p className="muted">
-                    Open any video and type a collection name beneath the
-                    player. Videos with the same name live together in your
-                    sidebar.
-                  </p>
-                  <button className="btn primary" onClick={() => setDialog("")}>
-                    Got it
-                    <Check size={16} />
-                  </button>
-                </>
-              ) : dialog === "settings" || dialog === "workspace" ? (
-                <WorkspaceSettings notify={notify} />
-              ) : help ? (
-                <>
-                  <HelpCircle size={27} />
-                  <h2>Good to know.</h2>
-                  <div className="help-item">
-                    <kbd>R</kbd>
-                    <span>Open the recorder</span>
+            {help ? (
+              <>
+                <h2>Help</h2>
+                <h3 className="help-heading">Keyboard shortcuts</h3>
+                <dl className="shortcut-list">
+                  <div>
+                    <dt>
+                      <kbd>R</kbd>
+                    </dt>
+                    <dd>New recording</dd>
+                  </div>
+                  <div>
+                    <dt>
+                      <kbd>{mod} K</kbd>
+                    </dt>
+                    <dd>Search your videos</dd>
+                  </div>
+                  <div>
+                    <dt>
+                      <kbd>{mod} Z</kbd>
+                    </dt>
+                    <dd>Undo an edit (add Shift to redo)</dd>
+                  </div>
+                  <div>
+                    <dt>
+                      <kbd>Delete</kbd>
+                    </dt>
+                    <dd>Cut the selected words in a transcript</dd>
+                  </div>
+                  <div>
+                    <dt>
+                      <kbd>←</kbd> <kbd>→</kbd> <kbd>Delete</kbd>
+                    </dt>
+                    <dd>
+                      On a timeline bar: move it (add Shift to change its
+                      length) or remove it
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>
+                      <kbd>F</kbd> <kbd>M</kbd>
+                    </dt>
+                    <dd>Full screen and mute while watching</dd>
+                  </div>
+                  <div>
+                    <dt>
+                      <kbd>Space</kbd>
+                    </dt>
+                    <dd>Play or pause</dd>
+                  </div>
+                  <div>
+                    <dt>
+                      <kbd>← →</kbd>
+                    </dt>
+                    <dd>Skip back or forward 5 seconds</dd>
                   </div>
                   {window.relayDesktop && (
                     <>
-                      <div className="help-item">
-                        <kbd>⌥ ⇧ R</kbd>
-                        <span>
-                          Record from anywhere · press again to finish
-                        </span>
+                      <div>
+                        <dt>
+                          <kbd>⌥ ⇧ R</kbd>
+                        </dt>
+                        <dd>Record from anywhere; press again to finish</dd>
                       </div>
-                      <div className="help-item">
-                        <kbd>⌥ ⇧ P</kbd>
-                        <span>Pause or resume while recording</span>
+                      <div>
+                        <dt>
+                          <kbd>⌥ ⇧ P</kbd>
+                        </dt>
+                        <dd>Pause or resume a recording</dd>
                       </div>
-                      <div className="help-item">
-                        <kbd>⌥ ⇧ D</kbd>
-                        <span>Draw on screen while recording</span>
+                      <div>
+                        <dt>
+                          <kbd>⌥ ⇧ D</kbd>
+                        </dt>
+                        <dd>Draw on screen while recording</dd>
                       </div>
-                      <div className="help-item">
-                        <kbd>⌥ ⇧ C</kbd>
-                        <span>Discard the current recording</span>
+                      <div>
+                        <dt>
+                          <kbd>⌥ ⇧ C</kbd>
+                        </dt>
+                        <dd>Discard the current recording</dd>
                       </div>
                     </>
                   )}
-                  <div className="help-item">
-                    <kbd>⌘ / Ctrl K</kbd>
-                    <span>Find a video</span>
-                  </div>
-                  <div className="help-item">
-                    <ScissorsIcon />
-                    <span>Open a video → Trim video → Save a new copy</span>
-                  </div>
-                  <p className="muted">
-                    For screen capture, use Chrome, Edge or the desktop app.
-                    Your browser will ask which screen to share and whether to
-                    include audio.
-                  </p>
-                  <p className="small muted">
-                    Share links work wherever your server is reachable. A
-                    localhost link is only available on this computer.
-                  </p>
+                </dl>
+                <h3 className="help-heading">Good to know</h3>
+                <p className="muted">
+                  {window.relayDesktop
+                    ? "Your recordings are stored on this Mac. Share links work on this computer while Relay is open."
+                    : "To record your screen, use Chrome or Edge, or the Relay Mac app. Your browser asks which screen to share."}
+                </p>
+                <div className="dialog-footer">
+                  <span className="small muted">Relay {__RELAY_VERSION__}</span>
                   <button className="btn" onClick={() => void openOnboarding()}>
                     Replay the setup guide
-                    <ArrowRight size={15} />
                   </button>
-                </>
-              ) : (
-                <>
-                  <Logo />
-                  <h2>A little more human.</h2>
-                  <p className="muted">
-                    Relay is an open-source recording studio for explaining
-                    things well. Capture your screen, trim the edges, and send
-                    the whole thought.
-                  </p>
-                  <div className="about-pills">
-                    <span>MIT licensed</span>
-                    <span>Self-hosted</span>
-                    <span>No subscriptions</span>
-                  </div>
-                  <p className="small muted">
-                    Version {__RELAY_VERSION__} · Built for your screen, your
-                    voice, and your way of working.
-                  </p>
-                </>
-              )}
-            </section>
-          </div>
+                </div>
+              </>
+            ) : (
+              <WorkspaceSettings notify={notify} focus={settingsFocus} />
+            )}
+          </Modal>
         )}
         {busy && (
           <div className="busy-overlay" role="status">

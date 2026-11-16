@@ -39,7 +39,7 @@ try {
   }
   window.setDefaultTimeout(60000);
   await window.waitForSelector(".app-shell");
-  assert.equal(await window.title(), "Relay — Ideas worth sharing");
+  await window.waitForFunction(() => document.title.endsWith("· Relay"));
   const info = await window.evaluate(() => window.relayDesktop.info());
   assert.equal(info.stablePort, true, "Library should use its stable port");
   assert.equal(new URL(window.url()).port, "41730");
@@ -65,7 +65,9 @@ try {
   await window.keyboard.press("Escape");
   await setup.waitFor({ state: "hidden" });
   await window.waitForFunction(() =>
-    document.querySelector(".workspace-avatar")?.textContent?.startsWith("M"),
+    document
+      .querySelector(".profile-row .avatar")
+      ?.textContent?.startsWith("M"),
   );
   assert.ok(
     await app.evaluate(({ Menu }) =>
@@ -133,7 +135,7 @@ try {
   const isVisible = () =>
     app.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()
-        .find((w) => w.getTitle().startsWith("Relay —"))
+        .find((w) => w.webContents.getURL().startsWith("http"))
         .isVisible(),
     );
   let countdownWindow = app.waitForEvent("window");

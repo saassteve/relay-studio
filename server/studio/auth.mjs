@@ -180,6 +180,7 @@ export function createAuth({ app, db, password, rateLimit }) {
     afterRecording: (v) => ["copy-link", "open-editor"].includes(v),
     countdown: (v) => [0, 3, 5].includes(v),
     hideWindow: (v) => typeof v === "boolean",
+    keyShortcuts: (v) => typeof v === "boolean",
     bubble: (v) => typeof v === "boolean",
     bubbleSize: (v) => ["s", "m", "l"].includes(v),
     quality: (v) => [1280, 1920, 3840].includes(v),

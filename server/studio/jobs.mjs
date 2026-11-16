@@ -18,7 +18,7 @@ export function createJobs(db) {
       while (!closed) {
         const row = db
           .prepare(
-            `SELECT * FROM jobs WHERE status='queued' AND type ${lane === "ai" ? "IN" : "NOT IN"} ('transcribe','summarize','prepare-ai') ORDER BY CASE type WHEN 'finish-recording' THEN 0 WHEN 'render' THEN 1 ELSE 2 END,created LIMIT 1`,
+            `SELECT * FROM jobs WHERE status='queued' AND type ${lane === "ai" ? "IN" : "NOT IN"} ('transcribe','summarize','prepare-ai','assist') ORDER BY CASE type WHEN 'finish-recording' THEN 0 WHEN 'render' THEN 1 ELSE 2 END,created LIMIT 1`,
           )
           .get();
         if (!row) break;

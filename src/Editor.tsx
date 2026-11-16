@@ -16,13 +16,38 @@ import {
   Star,
   Folder,
   Trash2,
+  MoreHorizontal,
 } from "lucide-react";
 import { api, bytes, clock, mediaURL, type Clip } from "./types";
-import { FrameStrip } from "./FrameStrip";
 import { ShareSettings } from "./ShareSettings";
 import { AnalyticsPanel } from "./AnalyticsPanel";
 import { usePlayback, trackCTA } from "./usePlayback";
-import { StudioWorkbench } from "./StudioWorkbench";
+import { StudioWorkbench, type WorkbenchHandle } from "./StudioWorkbench";
+import { WatchPlayer } from "./WatchPlayer";
+import { Menu, Modal, confirmDialog, tab as tabAttrs, tabPanel } from "./Modal";
+import { Logo } from "./Logo";
+// Groups transcript words into short phrases a viewer can read and jump to.
+function phrases(words: { text: string; start: number }[]) {
+  const out: { start: number; text: string }[] = [];
+  let current: string[] = [],
+    start = 0;
+  words.forEach((w, i) => {
+    if (!current.length) start = w.start;
+    current.push(w.text.trim());
+    const text = w.text.trim();
+    if (
+      i === words.length - 1 ||
+      current.length >= 16 ||
+      (current.length >= 5 && /[.!?]$/.test(text))
+    ) {
+      out.push({ start, text: current.join(" ") });
+      current = [];
+    }
+  });
+  return out;
+}
+// A link to this computer only opens here, so sending means downloading the file.
+const localOnly = ["127.0.0.1", "localhost"].includes(location.hostname);
 export function Editor({
   initial,
   token,
@@ -49,18 +74,32 @@ export function Editor({
     [comment, setComment] = useState(""),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
+    [commentError, setCommentError] = useState(""),
     [sharing, setSharing] = useState(false),
-    [trim, setTrim] = useState(false),
-    [start, setStart] = useState(0),
-    [end, setEnd] = useState(initial.duration),
+    [pending, setPending] = useState(false),
     [title, setTitle] = useState(initial.title),
     [notes, setNotes] = useState(initial.description),
-    [confirmDelete, setConfirmDelete] = useState(false),
-    [speed, setSpeed] = useState("1"),
     [messageBusy, setMessageBusy] = useState(false),
     [replyTo, setReplyTo] = useState<string | null>(null);
-  const player = useRef<HTMLVideoElement>(null);
+  const player = useRef<HTMLVideoElement>(null),
+    draft = useRef<WorkbenchHandle>(null);
+  const canEdit = !token && !readOnly;
+  const saveShare = useRef<() => Promise<boolean>>(async () => true);
+  const [shareDirty, setShareDirty] = useState(false);
+  useEffect(() => {
+    document.title = `${clip.title} · Relay`;
+    return () => {
+      document.title = "Relay — Ideas worth sharing";
+    };
+  }, [clip.title]);
   usePlayback(player, clip, token);
+  // Opening a video starts at its heading, for keyboards and screen readers.
+  useEffect(() => {
+    const heading = document.querySelector<HTMLElement>(".editor h1");
+    if (!heading) return;
+    heading.tabIndex = -1;
+    heading.focus({ preventScroll: true });
+  }, []);
   useEffect(() => {
     if (token && !sessionStorage.getItem(`view-${token}`)) {
       void api(`/api/share/${token}/view`, { method: "POST" })
@@ -72,44 +111,42 @@ export function Editor({
     const key = (e: KeyboardEvent) => {
       if (
         sharing ||
-        confirmDelete ||
         (e.target as HTMLElement).closest(
-          "input,textarea,select,button,video",
+          "input,textarea,select,button,a,video,summary,[role=dialog]",
         ) ||
         e.metaKey ||
         e.ctrlKey ||
         e.altKey
       )
         return;
+      const step = e.key === "ArrowRight" ? 5 : e.key === "ArrowLeft" ? -5 : 0;
+      if (canEdit) {
+        if (e.code === "Space") {
+          e.preventDefault();
+          draft.current?.toggle();
+        } else if (step) {
+          e.preventDefault();
+          draft.current?.seek(draft.current.time() + step);
+        }
+        return;
+      }
       const v = player.current;
       if (!v) return;
       if (e.code === "Space") {
         e.preventDefault();
         if (v.paused) void v.play().catch(() => {});
         else v.pause();
-      }
-      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      } else if (step) {
         e.preventDefault();
         v.currentTime = Math.max(
           0,
-          Math.min(
-            clip.duration,
-            v.currentTime + (e.key === "ArrowRight" ? 5 : -5),
-          ),
+          Math.min(clip.duration, v.currentTime + step),
         );
-      }
-      if (!token && !readOnly && e.key.toLowerCase() === "i") {
-        setTrim(true);
-        setStart(Math.min(v.currentTime, end - 0.1));
-      }
-      if (!token && !readOnly && e.key.toLowerCase() === "o") {
-        setTrim(true);
-        setEnd(Math.max(v.currentTime, start + 0.1));
       }
     };
     addEventListener("keydown", key);
     return () => removeEventListener("keydown", key);
-  }, [clip.duration, sharing, confirmDelete, token, start, end]);
+  }, [clip.duration, sharing, canEdit]);
   const update = (v: Clip) => {
     setClip(v);
     onUpdate(v);
@@ -128,6 +165,8 @@ export function Editor({
   };
   const share = async () => {
     setError("");
+    // On this computer a link is only made if you ask for the share page.
+    if (localOnly) return setSharing(true);
     setBusy(true);
     try {
       if (!clip.token)
@@ -141,6 +180,35 @@ export function Editor({
       setBusy(false);
     }
   };
+  const createLink = async () => {
+    if (clip.token) return;
+    try {
+      update(
+        await api<Clip>(`/api/videos/${clip.id}/share`, { method: "POST" }),
+      );
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  // Puts the latest edits into the video without leaving the dialog.
+  const [updating, setUpdating] = useState(false);
+  const publishHere = async (thenDownload: boolean) => {
+    setUpdating(true);
+    try {
+      const done = await draft.current?.publish();
+      if (!done)
+        return setError(
+          "The video couldn’t be updated just now. Close this and try Update video again.",
+        );
+      if (thenDownload) location.href = `${mediaURL(clip, token)}?download=1`;
+    } finally {
+      setUpdating(false);
+    }
+  };
+  // However the dialog is closed, what was typed in it is kept.
+  const closeShare = async () => {
+    if (await saveShare.current()) setSharing(false);
+  };
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(`${location.origin}/s/${clip.token}`);
@@ -152,7 +220,7 @@ export function Editor({
   const send = async (e: React.FormEvent) => {
     e.preventDefault();
     setMessageBusy(true);
-    setError("");
+    setCommentError("");
     try {
       const v = await api<Clip>(
         token
@@ -172,30 +240,33 @@ export function Editor({
       update(v);
       setComment("");
       setReplyTo(null);
+      notify("Comment posted");
     } catch (e) {
-      setError((e as Error).message);
+      setCommentError((e as Error).message);
     } finally {
       setMessageBusy(false);
     }
   };
-  const exportTrim = async () => {
-    setBusy(true);
-    setError("");
+  const remove = async () => {
+    if (
+      !(await confirmDialog({
+        title: "Delete this video?",
+        body: "The recording, its comments and its share link will be permanently deleted.",
+        confirm: "Delete video",
+        cancel: "Keep video",
+        destructive: true,
+      }))
+    )
+      return;
     try {
-      const v = await api<Clip>(`/api/videos/${clip.id}/trim`, {
-        method: "POST",
-        body: JSON.stringify({ start, end }),
-      });
-      notify("Trimmed copy saved to your library");
-      onUpdate(v);
-      setTrim(false);
+      await api(`/api/videos/${clip.id}`, { method: "DELETE" });
+      onDelete();
     } catch (e) {
       setError((e as Error).message);
-    } finally {
-      setBusy(false);
     }
   };
   const seek = (n: number) => {
+    if (canEdit) return draft.current?.seek(n);
     if (player.current) {
       player.current.currentTime = n;
       setTime(n);
@@ -219,232 +290,164 @@ export function Editor({
       className={`editor ${token ? "public-editor" : ""} ${embedded ? "embedded-editor" : ""}`}
     >
       <header className="editor-header">
-        <button className="text-button" onClick={onBack}>
-          {token ? (
-            <span className="wordmark mini">◒ relay</span>
-          ) : (
+        {token ? (
+          <span className="watch-brand">
+            <Logo small />
+          </span>
+        ) : (
+          <button className="text-button" onClick={onBack}>
+            <ArrowLeft size={18} /> Library
+          </button>
+        )}
+        {canEdit ? (
+          <>
+            <h1 className="sr-only">{clip.title}</h1>
+            <input
+              className="editable-title"
+              aria-label="Video title"
+              value={title}
+              maxLength={160}
+              onChange={(e) => setTitle(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+              onBlur={() => {
+                if (title.trim() && title !== clip.title)
+                  void mutate({ title });
+                else setTitle(clip.title);
+              }}
+            />
+          </>
+        ) : (
+          <span className="editor-breadcrumb" />
+        )}
+        <div className="actions">
+          {canEdit && (
             <>
-              <ArrowLeft size={18} /> Your library
+              <button
+                className="icon-button"
+                aria-label="Starred"
+                title={clip.starred ? "Remove star" : "Star this video"}
+                aria-pressed={!!clip.starred}
+                onClick={() => void mutate({ starred: !clip.starred })}
+              >
+                <Star size={18} fill={clip.starred ? "currentColor" : "none"} />
+              </button>
+              <Menu label="More options">
+                <label className="field small">
+                  Collection
+                  <input
+                    aria-label="Collection"
+                    placeholder="For example, Onboarding"
+                    defaultValue={clip.folder}
+                    maxLength={80}
+                    onKeyDown={(e) =>
+                      e.key === "Enter" && e.currentTarget.blur()
+                    }
+                    onBlur={(e) => {
+                      if (e.target.value !== clip.folder)
+                        void mutate({ folder: e.target.value });
+                    }}
+                  />
+                </label>
+                <p className="small muted">
+                  {new Date(clip.created).toLocaleDateString(undefined, {
+                    day: "numeric",
+                    month: "long",
+                    year: "numeric",
+                  })}{" "}
+                  · {bytes(clip.size)} · {clip.views}{" "}
+                  {clip.views === 1 ? "view" : "views"}
+                </p>
+                <button
+                  className="text-button danger"
+                  data-close
+                  onClick={() => void remove()}
+                >
+                  <Trash2 size={15} />
+                  Delete video
+                </button>
+              </Menu>
             </>
           )}
-        </button>
-        <span className="editor-breadcrumb">
-          {token
-            ? "A little context, sent your way."
-            : "Workspace / Video editor"}
-        </span>
-        <div className="actions">
           {((!token && !readOnly) || clip.downloadAllowed !== false) && (
-            <a className="btn" href={`${mediaURL(clip, token)}?download=1`}>
+            <a
+              className="btn"
+              href={`${mediaURL(clip, token)}?download=1`}
+              onClick={async (e) => {
+                if (!canEdit || !pending) return;
+                e.preventDefault();
+                const href = e.currentTarget.href;
+                if (
+                  await confirmDialog({
+                    title: "Download without your latest edits?",
+                    body: "Your newest edits aren’t in the video file yet. Choose Update video first to include them.",
+                    confirm: "Download anyway",
+                  })
+                )
+                  location.href = href;
+              }}
+            >
               <Download size={16} />
               Download
             </a>
           )}
-          {!token && !readOnly && (
+          {canEdit && (
             <button
-              className="btn primary"
+              // While edits wait to be put in the video, that is the one main action.
+              className={`btn ${pending ? "" : "primary"}`}
               disabled={busy}
               onClick={() => void share()}
             >
               <ArrowUpRight size={16} />
-              Share video
+              {localOnly ? "Send" : "Share"}
             </button>
           )}
         </div>
       </header>
       <div className="editor-layout">
         <main className="editor-main">
-          <div className="video-player">
-            <video
-              ref={player}
-              src={`${mediaURL(clip, token)}?v=${clip.revision || 0}`}
-              poster={clip.thumbnail || undefined}
-              controls
-              playsInline
-              onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
-              onLoadedMetadata={() => {
-                if (player.current) {
-                  player.current.playbackRate = Number(speed);
+          {!canEdit && (
+            <>
+              <WatchPlayer
+                video={player}
+                src={`${mediaURL(clip, token)}?v=${clip.revision || 0}`}
+                duration={clip.duration}
+                hasCaptions={!!clip.transcript?.length}
+                label={clip.title}
+                onTime={setTime}
+                onReady={(v) => {
                   const t = Number(
                     new URLSearchParams(location.search).get("t"),
                   );
-                  if (t > 0 && t < clip.duration)
-                    player.current.currentTime = t;
-                }
-              }}
-            >
-              {clip.transcript?.length ? (
-                <track
-                  key={`${clip.revision}-${clip.transcript.length}`}
-                  kind="captions"
-                  label="Transcript"
-                  srcLang="en"
-                  src={
-                    token
-                      ? `/api/share/${token}/captions.vtt`
-                      : `/api/videos/${clip.id}/captions.vtt`
-                  }
-                />
-              ) : null}
-            </video>
-            <span className="player-brand">relay</span>
-          </div>
-          <div className="player-tools">
-            <span>
-              <span className="tiny-dot" />
-              {clock(time)}{" "}
-              <span className="muted">/ {clock(clip.duration)}</span>
-            </span>
-            <div className="actions">
-              <label className="small">
-                Speed{" "}
-                <select
-                  aria-label="Playback speed"
-                  value={speed}
-                  onChange={(e) => {
-                    setSpeed(e.target.value);
-                    if (player.current)
-                      player.current.playbackRate = Number(e.target.value);
-                  }}
-                >
-                  {[".75", "1", "1.25", "1.5", "2"].map((s) => (
-                    <option key={s} value={s}>
-                      {s}×
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {!token && !readOnly && (
-                <button
-                  className={`btn small ${trim ? "active" : ""}`}
-                  onClick={() => {
-                    setTrim(!trim);
-                    player.current?.pause();
-                  }}
-                >
-                  <Scissors size={15} />
-                  Trim video
-                </button>
-              )}
-            </div>
-          </div>
-          {trim && (
-            <section className="trim-panel">
-              <div className="section-heading">
-                <div>
-                  <h3>Keep the good part.</h3>
-                  <p className="small muted">
-                    Set your in and out points. Your original stays safe.
-                  </p>
-                </div>
-                <Scissors size={20} />
-              </div>
-              <FrameStrip
-                src={mediaURL(clip)}
-                duration={clip.duration}
-                start={start}
-                end={end}
-                poster={clip.thumbnail}
-                onSeek={seek}
-              />
-              <div className="trim-sliders">
-                <label>
-                  In{" "}
-                  <input
-                    aria-label="Trim start"
-                    type="range"
-                    min={0}
-                    max={Math.max(0, end - 0.1)}
-                    step=".1"
-                    value={start}
-                    onChange={(e) => {
-                      setStart(+e.target.value);
-                      seek(+e.target.value);
-                    }}
-                  />
-                </label>
-                <label>
-                  Out{" "}
-                  <input
-                    aria-label="Trim end"
-                    type="range"
-                    min={start + 0.1}
-                    max={clip.duration}
-                    step=".1"
-                    value={end}
-                    onChange={(e) => {
-                      setEnd(+e.target.value);
-                      seek(+e.target.value);
-                    }}
-                  />
-                </label>
-              </div>
-              <div className="trim-controls">
-                <label>
-                  Start (seconds)
-                  <input
-                    aria-label="Start seconds"
-                    type="number"
-                    min={0}
-                    max={end - 0.1}
-                    step=".1"
-                    value={Math.round(start * 10) / 10}
-                    onChange={(e) =>
-                      setStart(
-                        Math.max(
-                          0,
-                          Math.min(Number(e.target.value), end - 0.1),
-                        ),
-                      )
+                  if (t > 0 && t < clip.duration) v.currentTime = t;
+                }}
+              >
+                {clip.transcript?.length ? (
+                  <track
+                    key={`${clip.revision}-${clip.transcript.length}`}
+                    kind="captions"
+                    label="Transcript"
+                    srcLang="en"
+                    src={
+                      token
+                        ? `/api/share/${token}/captions.vtt`
+                        : `/api/videos/${clip.id}/captions.vtt`
                     }
                   />
-                </label>
-                <label>
-                  End (seconds)
-                  <input
-                    aria-label="End seconds"
-                    type="number"
-                    min={start + 0.1}
-                    max={clip.duration}
-                    step=".1"
-                    value={Math.round(end * 10) / 10}
-                    onChange={(e) =>
-                      setEnd(
-                        Math.min(
-                          clip.duration,
-                          Math.max(+e.target.value, start + 0.1),
-                        ),
-                      )
-                    }
-                  />
-                </label>
-                <span className="muted small">
-                  {clock(end - start)} selected
-                </span>
-                <button
-                  className="btn primary"
-                  disabled={busy || end <= start}
-                  onClick={() => void exportTrim()}
-                >
-                  {busy ? (
-                    <LoaderCircle size={16} className="spin" />
-                  ) : (
-                    <Check size={16} />
-                  )}{" "}
-                  {busy ? "Rendering…" : "Save trimmed copy"}
-                </button>
-              </div>
-            </section>
+                ) : null}
+              </WatchPlayer>
+            </>
           )}
-          {!token && !readOnly && (
+          {canEdit && (
             <StudioWorkbench
+              ref={draft}
+              onTime={setTime}
+              onPending={setPending}
               clip={clip}
               onRendered={(v) => {
                 update(v);
                 setTitle(v.title);
               }}
               notify={notify}
-              onSeek={seek}
             />
           )}
           {token && clip.cta?.url && (
@@ -459,102 +462,65 @@ export function Editor({
               <ArrowUpRight size={16} />
             </a>
           )}
-          <div className="video-heading">
-            {token || readOnly ? (
+          {!canEdit && (
+            <div className="video-heading">
               <h1>{clip.title}</h1>
-            ) : (
-              <input
-                className="editable-title"
-                aria-label="Video title"
-                value={title}
-                maxLength={160}
-                onChange={(e) => setTitle(e.target.value)}
-                onBlur={() => {
-                  if (title !== clip.title) void mutate({ title });
-                }}
-              />
-            )}
-            <div className="clip-meta">
-              <span className="avatar owner">S</span>
-              <strong>{token ? "Shared with you" : "Your recording"}</strong>
-              <span>·</span>
-              <span>
-                {new Date(clip.created).toLocaleDateString("en-GB", {
-                  day: "numeric",
-                  month: "long",
-                  year: "numeric",
-                })}
-              </span>
-              <span>·</span>
-              <span>{bytes(clip.size)}</span>
-              {!token && !readOnly && (
-                <>
-                  <span>·</span>
-                  <span>
-                    <Eye size={14} />
-                    {clip.views} views
-                  </span>
-                </>
-              )}
+              <div className="clip-meta">
+                {clip.author && (
+                  <>
+                    <span className="avatar owner">
+                      {clip.author.trim()[0]?.toUpperCase()}
+                    </span>
+                    <strong>{clip.author}</strong>
+                    <span>·</span>
+                  </>
+                )}
+                <span>
+                  {new Date(clip.created).toLocaleDateString(undefined, {
+                    day: "numeric",
+                    month: "long",
+                    year: "numeric",
+                  })}
+                </span>
+              </div>
             </div>
-          </div>
-          {token ? (
-            <div className="reaction-bar">
-              <span className="muted small">Send a little appreciation</span>
-              {["❤️", "👏", "💡", "🎉"].map((emoji) => (
-                <button key={emoji} onClick={() => void react(emoji)}>
-                  {emoji}
-                  <span>
-                    {clip.reactions.find((r) => r.emoji === emoji)?.count || ""}
-                  </span>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div className="organize-bar">
-              <button
-                className="text-button"
-                onClick={() => void mutate({ starred: !clip.starred })}
-              >
-                <Star size={16} fill={clip.starred ? "currentColor" : "none"} />
-                {clip.starred ? "Starred" : "Add to starred"}
-              </button>
-              <label>
-                <Folder size={16} />
-                <input
-                  aria-label="Collection"
-                  placeholder="Add to a collection"
-                  defaultValue={clip.folder}
-                  maxLength={80}
-                  onBlur={(e) => {
-                    if (e.target.value !== clip.folder)
-                      void mutate({ folder: e.target.value });
-                  }}
-                />
-              </label>
-              <button
-                className="text-button danger"
-                onClick={() => setConfirmDelete(true)}
-              >
-                <Trash2 size={16} />
-                Delete
-              </button>
+          )}
+          {token && (
+            <div
+              className="reaction-bar"
+              role="group"
+              aria-label="React to this video"
+            >
+              {["❤️", "👏", "💡", "🎉"].map((emoji) => {
+                const count = clip.reactions.find(
+                  (r) => r.emoji === emoji,
+                )?.count;
+                return (
+                  <button
+                    key={emoji}
+                    aria-label={`React with ${emoji}${count ? `, ${count} so far` : ""}`}
+                    onClick={() => void react(emoji)}
+                  >
+                    {emoji}
+                    {count ? <span>{count}</span> : null}
+                  </button>
+                );
+              })}
             </div>
           )}
           {token && !!clip.transcript?.length && (
             <details className="transcript-public">
               <summary>Read the transcript</summary>
-              <div>
-                {clip.transcript.map((word, i) => (
-                  <button
-                    key={i}
-                    onClick={() => seek(word.start)}
-                    title={clock(word.start)}
-                  >
-                    {word.text}
-                  </button>
+              <ol className="transcript-phrases">
+                {phrases(clip.transcript).map((p) => (
+                  <li key={p.start}>
+                    <button onClick={() => seek(p.start)}>
+                      <span>{clock(p.start)}</span>
+                      {p.text}
+                    </button>
+                  </li>
                 ))}
-              </div>
+              </ol>
             </details>
           )}
           {error && (
@@ -564,23 +530,32 @@ export function Editor({
           )}
         </main>
         <aside className="review-sidebar">
-          <div className="review-tabs">
+          <div
+            className="review-tabs"
+            role="tablist"
+            aria-label="About this video"
+          >
             <button
+              {...tabAttrs(tab === "activity", "review-activity")}
               className={tab === "activity" ? "active" : ""}
               onClick={() => setTab("activity")}
             >
               <MessageSquare size={16} />
-              Feedback <span>{clip.comments.length}</span>
+              Comments <span>{clip.comments.length}</span>
             </button>
-            <button
-              className={tab === "notes" ? "active" : ""}
-              onClick={() => setTab("notes")}
-            >
-              <FileText size={16} />
-              Notes
-            </button>
+            {(canEdit || clip.description || clip.outline?.summary) && (
+              <button
+                {...tabAttrs(tab === "notes", "review-notes")}
+                className={tab === "notes" ? "active" : ""}
+                onClick={() => setTab("notes")}
+              >
+                <FileText size={16} />
+                Notes
+              </button>
+            )}
             {!token && !readOnly && (
               <button
+                {...tabAttrs(tab === "analytics", "review-analytics")}
                 className={tab === "analytics" ? "active" : ""}
                 onClick={() => setTab("analytics")}
               >
@@ -590,18 +565,18 @@ export function Editor({
             )}
           </div>
           {tab === "activity" ? (
-            <>
+            <div className="review-panel" {...tabPanel("review-activity")}>
               <div className="comments">
                 {clip.comments.length === 0 ? (
                   <div className="comment-empty">
                     <div className="empty-icon">
                       <MessageSquare size={25} strokeWidth={1.3} />
                     </div>
-                    <h3>Start a conversation.</h3>
+                    <h2>No comments yet</h2>
                     <p>
-                      Good feedback has context.
-                      <br />
-                      Comments are linked to a moment.
+                      {token
+                        ? "Pause where you have something to say and add a comment."
+                        : "When viewers comment, you’ll see it here."}
                     </p>
                   </div>
                 ) : (
@@ -617,6 +592,7 @@ export function Editor({
                         <strong>{c.author}</strong>
                         <button
                           className="timestamp"
+                          aria-label={`Jump to ${clock(c.time)}`}
                           onClick={() => seek(c.time)}
                         >
                           {clock(c.time)}
@@ -625,7 +601,14 @@ export function Editor({
                         <div className="comment-actions">
                           <button
                             className="text-button small"
-                            onClick={() => setReplyTo(c.id)}
+                            aria-label={`Reply to ${c.author}`}
+                            onClick={(e) => {
+                              setReplyTo(c.id);
+                              e.currentTarget
+                                .closest(".review-panel")
+                                ?.querySelector<HTMLElement>("textarea")
+                                ?.focus();
+                            }}
                           >
                             Reply
                           </button>
@@ -653,7 +636,7 @@ export function Editor({
                               {c.resolved ? "Reopen" : "Resolve"}
                             </button>
                           )}
-                          {c.resolved && <span>Resolved</span>}
+                          {!!c.resolved && <span>Resolved</span>}
                         </div>
                       </div>
                     </article>
@@ -678,17 +661,27 @@ export function Editor({
                     <span className="tiny-dot" />
                     Comment at <b>{clock(time)}</b>
                   </div>
-                  <input
-                    aria-label="Your name"
-                    placeholder="Your name"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    required
-                    maxLength={60}
-                  />
+                  {token && (
+                    <label className="small-label" htmlFor="comment-name">
+                      Your name
+                    </label>
+                  )}
+                  {token && (
+                    <input
+                      id="comment-name"
+                      autoComplete="name"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      required
+                      maxLength={60}
+                    />
+                  )}
+                  <label className="small-label" htmlFor="comment-body">
+                    {replyTo ? "Your reply" : "Comment"}
+                  </label>
                   <textarea
-                    aria-label="Comment"
-                    placeholder="Your feedback… Mention a teammate with @name or @email."
+                    id="comment-body"
+                    placeholder={`Add a comment at ${clock(time)}`}
                     value={comment}
                     onChange={(e) => setComment(e.target.value)}
                     required
@@ -696,28 +689,37 @@ export function Editor({
                   />
                   <button
                     className="btn primary"
-                    disabled={messageBusy || !name.trim() || !comment.trim()}
+                    disabled={
+                      messageBusy ||
+                      (!!token && !name.trim()) ||
+                      !comment.trim()
+                    }
                   >
                     <Send size={15} />
                     {messageBusy ? "Sending…" : "Post comment"}
                   </button>
+                  {commentError && (
+                    <div className="error" role="alert">
+                      {commentError}
+                    </div>
+                  )}
                 </form>
               )}
               {readOnly && clip.token && (
                 <a className="btn" href={`/s/${clip.token}`}>
-                  Open review to leave feedback
+                  Open the shared page to comment
                 </a>
               )}
-            </>
+            </div>
           ) : (
-            <div className="notes">
+            <div className="notes" {...tabPanel(`review-${tab}`)}>
               {tab === "analytics" ? (
                 <AnalyticsPanel id={clip.id} />
               ) : (
                 <>
                   {clip.outline?.summary && (
                     <>
-                      <h3>In a few words.</h3>
+                      <h2>Summary</h2>
                       <p className="notes-text">{clip.outline.summary}</p>
                       {clip.outline.chapters?.map((c, i) => (
                         <button
@@ -731,8 +733,7 @@ export function Editor({
                       ))}
                     </>
                   )}
-                  <span className="eyebrow">A LITTLE MORE CONTEXT</span>
-                  <h3>The useful details.</h3>
+                  <h2>Notes</h2>
                   {token || readOnly ? (
                     <p className="notes-text">
                       {clip.description || "No notes added to this video yet."}
@@ -745,17 +746,15 @@ export function Editor({
                         onChange={(e) => setNotes(e.target.value)}
                         maxLength={20000}
                         placeholder="Key takeaways, helpful links, next steps…"
+                        onBlur={() => {
+                          if (notes !== clip.description)
+                            void mutate({ description: notes });
+                        }}
                       />
-                      <button
-                        className="btn primary"
-                        disabled={notes === clip.description}
-                        onClick={() => void mutate({ description: notes })}
-                      >
-                        <Check size={16} />
-                        Save notes
-                      </button>
-                      <p className="muted small">
-                        Notes are included on your shared watch page.
+                      <p className="muted small" role="status">
+                        {notes === clip.description
+                          ? "Saved. Viewers see these notes next to the video."
+                          : "Saves when you click away."}
                       </p>
                     </>
                   )}
@@ -763,109 +762,178 @@ export function Editor({
               )}{" "}
             </div>
           )}
-          <div className="review-footer">
-            <span className="wordmark mini">◒ relay</span>
-            <span>Less meeting. More meaning.</span>
-          </div>
+          {token && (
+            <div className="review-footer">
+              <span>Made with</span>
+              <Logo small />
+            </div>
+          )}
         </aside>
       </div>
       {sharing && (
-        <div className="dialog-backdrop" onClick={() => setSharing(false)}>
-          <section
-            className="dialog share-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Share your video"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="eyebrow">PASS IT ON</div>
-            <h2>One link. All the context.</h2>
-            <p className="muted">
-              Choose who can watch and how they can respond.
-            </p>
-            <label className="share-link">
-              <Link size={18} />
-              <input
-                aria-label="Share link"
-                readOnly
-                value={`${location.origin}/s/${clip.token}`}
-                onFocus={(e) => e.target.select()}
+        <Modal
+          label={localOnly ? "Send this video" : "Share this video"}
+          className="share-dialog"
+          onClose={() => void closeShare()}
+        >
+          <h2>{localOnly ? "Send this video" : "Share this video"}</h2>
+          {(pending || updating) && !localOnly && (
+            <div className="share-note warn" role="status">
+              <span>
+                {updating
+                  ? "Putting your latest edits into the video…"
+                  : "Your latest edits aren’t in the shared video yet."}
+              </span>
+              <button
+                className="btn"
+                disabled={updating}
+                onClick={() => void publishHere(false)}
+              >
+                {updating ? "Updating…" : "Update video"}
+              </button>
+            </div>
+          )}
+          {localOnly ? (
+            <>
+              <p className="share-note">
+                Relay is running only on this computer, so a link wouldn’t open
+                for anyone else. Download the video and send the file.
+              </p>
+              {pending || updating ? (
+                <div className="share-actions" role="status">
+                  <button
+                    className="btn primary"
+                    disabled={updating}
+                    onClick={() => void publishHere(true)}
+                  >
+                    <Download size={16} />
+                    {updating
+                      ? "Putting your edits in…"
+                      : "Update and download"}
+                  </button>
+                  {!updating && (
+                    <a
+                      className="text-button"
+                      href={`${mediaURL(clip, token)}?download=1`}
+                    >
+                      Download without my latest edits
+                    </a>
+                  )}
+                </div>
+              ) : (
+                <a
+                  className="btn primary share-download"
+                  href={`${mediaURL(clip, token)}?download=1`}
+                >
+                  <Download size={16} />
+                  Download video
+                </a>
+              )}
+              <details
+                className="cut-more share-local"
+                onToggle={(e) => {
+                  if (e.currentTarget.open) void createLink();
+                }}
+              >
+                <summary>Share page on this computer</summary>
+                <div className="cut-more-body">
+                  {!clip.token && (
+                    <p className="small muted" role="status">
+                      Creating the page…
+                    </p>
+                  )}
+                  {clip.token && (
+                    <>
+                      <label className="share-link">
+                        <Link size={18} />
+                        <input
+                          aria-label="Share link"
+                          readOnly
+                          value={`${location.origin}/s/${clip.token}`}
+                          onFocus={(e) => e.target.select()}
+                        />
+                        <button className="btn" onClick={() => void copy()}>
+                          <Copy size={14} />
+                          Copy link
+                        </button>
+                      </label>
+                      <ShareSettings
+                        clip={clip}
+                        onChange={update}
+                        notify={notify}
+                        time={time}
+                        saveRef={saveShare}
+                        onDirty={setShareDirty}
+                      />
+                    </>
+                  )}
+                </div>
+              </details>
+            </>
+          ) : (
+            <>
+              <label className="share-link">
+                <Link size={18} />
+                <input
+                  aria-label="Share link"
+                  readOnly
+                  value={`${location.origin}/s/${clip.token}`}
+                  onFocus={(e) => e.target.select()}
+                />
+                <button className="btn primary" onClick={() => void copy()}>
+                  <Copy size={14} />
+                  Copy link
+                </button>
+              </label>
+              <ShareSettings
+                clip={clip}
+                onChange={update}
+                notify={notify}
+                time={time}
+                saveRef={saveShare}
+                onDirty={setShareDirty}
               />
-              <button
-                className="icon-button"
-                aria-label="Copy link"
-                onClick={() => void copy()}
-              >
-                <Copy size={18} />
-              </button>
-            </label>
-            <ShareSettings
-              clip={clip}
-              onChange={update}
-              notify={notify}
-              time={time}
-            />
-            <div className="dialog-footer">
-              <button
-                className="text-button danger"
-                onClick={async () => {
-                  try {
-                    await api(`/api/videos/${clip.id}/share`, {
-                      method: "DELETE",
-                    });
-                    update({ ...clip, token: null });
-                    setSharing(false);
-                    notify("Share link revoked");
-                  } catch (e) {
-                    setError((e as Error).message);
-                  }
-                }}
-              >
-                <Unlink size={15} />
-                Revoke link
-              </button>
-              <button className="btn primary" onClick={() => setSharing(false)}>
-                Done
-                <Check size={16} />
-              </button>
+            </>
+          )}
+          {error && (
+            <div className="error" role="alert">
+              {error}
             </div>
-          </section>
-        </div>
-      )}
-      {confirmDelete && (
-        <div className="dialog-backdrop">
-          <section
-            className="dialog small-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Delete video"
-          >
-            <h2>Delete this video?</h2>
-            <p className="muted">
-              The recording, feedback and share link will be permanently
-              deleted.
-            </p>
-            <div className="dialog-footer">
-              <button className="btn" onClick={() => setConfirmDelete(false)}>
-                Keep video
-              </button>
-              <button
-                className="btn destructive"
-                onClick={async () => {
-                  try {
-                    await api(`/api/videos/${clip.id}`, { method: "DELETE" });
-                    onDelete();
-                  } catch (e) {
-                    setError((e as Error).message);
-                    setConfirmDelete(false);
-                  }
-                }}
-              >
-                Delete video
-              </button>
-            </div>
-          </section>
-        </div>
+          )}
+          <div className="dialog-footer">
+            <button
+              className="text-button danger"
+              hidden={!clip.token}
+              onClick={async () => {
+                if (
+                  !(await confirmDialog({
+                    title: "Turn off this link?",
+                    body: "Anyone who has the link will no longer be able to watch. You can create a new link later.",
+                    confirm: "Turn off link",
+                    destructive: true,
+                  }))
+                )
+                  return;
+                try {
+                  await api(`/api/videos/${clip.id}/share`, {
+                    method: "DELETE",
+                  });
+                  update({ ...clip, token: null });
+                  setSharing(false);
+                  notify("Share link turned off");
+                } catch (e) {
+                  setError((e as Error).message);
+                }
+              }}
+            >
+              <Unlink size={15} />
+              Turn off link
+            </button>
+            <button className="btn" onClick={() => void closeShare()}>
+              {shareDirty ? "Save and close" : "Done"}
+            </button>
+          </div>
+        </Modal>
       )}
     </div>
   );

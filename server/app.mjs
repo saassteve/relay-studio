@@ -1,5 +1,5 @@
 import express from "express";
-import { migrateStudio, parseJSON } from "./studio/schema.mjs";
+import { migrateStudio, parseJSON, downloadName } from "./studio/schema.mjs";
 import { createAuth } from "./studio/auth.mjs";
 import { registerStudio } from "./studio/index.mjs";
 import { mediaHeaders } from "./studio/schema.mjs";
@@ -509,10 +509,7 @@ export function createApp({
   app.get("/api/media/:id", owner, (req, res) => {
     const v = find(req.params.id);
     mediaHeaders(res, v.mime);
-    if (req.query.download)
-      res.attachment(
-        `relay-${v.id}.${v.mime === "video/webm" ? "webm" : "mp4"}`,
-      );
+    if (req.query.download) res.attachment(downloadName(v));
     res.sendFile(v.filename, { root: path.join(dataDir, "media") });
   });
   app.use("/api", (req, res) =>
