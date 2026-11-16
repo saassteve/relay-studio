@@ -1,6 +1,6 @@
 {
   "name": "relay-video",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -16,7 +16,8 @@
     "test:desktop": "npm run build && node tests/desktop.smoke.mjs",
     "desktop:provision": "node desktop/provision-ffmpeg.mjs",
     "desktop:pack": "npm run build && electron-builder --config electron-builder.config.cjs --mac dir --arm64",
-    "desktop:dist": "npm run build && electron-builder --config electron-builder.config.cjs --mac --arm64 --publish never"
+    "desktop:dist": "npm run build && electron-builder --config electron-builder.config.cjs --mac --arm64 --publish never",
+    "desktop:release": "sh scripts/release-mac.sh"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "1.3.0",

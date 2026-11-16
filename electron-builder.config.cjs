@@ -19,6 +19,8 @@ module.exports = {
     // Transformers' Node build embeds what it needs from onnxruntime-web.
     "!node_modules/onnxruntime-web/**",
     "!node_modules/onnxruntime-node/bin/napi-v*/{linux,win32}/**",
+    // Prebuilt add-ons for other systems are never loaded on a Mac.
+    "!node_modules/**/prebuilds/{ios,android,linux,win32}*/**",
     "!**/*.map",
     "!node_modules/ffmpeg-static/ffmpeg.exe",
   ],
