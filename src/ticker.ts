@@ -10,16 +10,16 @@ export function ticker(fn: () => void, fps: number): () => void {
     );
     const worker = new Worker(url);
     URL.revokeObjectURL(url);
-    let busy = false;
+    // Ticks arrive on the main thread's queue. If drawing a frame takes longer
+    // than the interval (a slow machine, or software rendering), skip ticks so
+    // the page always gets at least as much time as the frames do.
+    let next = 0;
     worker.onmessage = () => {
-      // Skip a beat rather than queue up if a frame is still being drawn.
-      if (busy) return;
-      busy = true;
-      try {
-        fn();
-      } finally {
-        busy = false;
-      }
+      const started = performance.now();
+      if (started < next) return;
+      fn();
+      const ended = performance.now();
+      next = ended + Math.min(250, ended - started);
     };
     return () => {
       worker.postMessage(0);
