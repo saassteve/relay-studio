@@ -75,10 +75,10 @@ const pointerAt = (t) => {
       x: mix(0.9, REST.x, (t - 3) / 1.4),
       y: mix(0.9, REST.y, (t - 3) / 1.4),
     };
-  if (t < 7.4) return REST;
+  if (t < 6.8) return REST;
   return {
-    x: mix(REST.x, 0.82, (t - 7.4) / 1.4),
-    y: mix(REST.y, 0.3, (t - 7.4) / 1.4),
+    x: mix(REST.x, 0.82, (t - 6.8) / 1.4),
+    y: mix(REST.y, 0.3, (t - 6.8) / 1.4),
   };
 };
 const LENGTH = 16;
@@ -131,100 +131,24 @@ const demos = [
   },
 ];
 
-// The presenter stands in for a real camera, here and in the recorder screenshot.
+// The presenter is a short AI-generated clip (not a real person) that stands in for a
+// camera, both in the demo recordings and in the recorder screenshot.
+const presenterClip = path.join(root, "scripts", "assets", "presenter.mp4");
 const presenterScript = () => {
-  const make = () => {
-    const c = document.createElement("canvas");
-    c.width = 960;
-    c.height = 720;
-    const g = c.getContext("2d");
-    const draw = (t) => {
-      const wall = g.createLinearGradient(0, 0, 0, 720);
-      wall.addColorStop(0, "#e6dfd3");
-      wall.addColorStop(1, "#c9c0b2");
-      g.fillStyle = wall;
-      g.fillRect(0, 0, 960, 720);
-      // A shelf and a plant behind them.
-      g.fillStyle = "#b39f86";
-      g.fillRect(70, 150, 190, 14);
-      g.fillStyle = "#8a7a66";
-      g.fillRect(96, 96, 26, 54);
-      g.fillStyle = "#c66b4e";
-      g.fillRect(128, 110, 22, 40);
-      g.fillStyle = "#3f6a58";
-      g.fillRect(156, 88, 30, 62);
-      g.fillStyle = "#6f8f63";
-      g.beginPath();
-      g.ellipse(790, 330, 62, 130, 0.25, 0, 7);
-      g.ellipse(850, 380, 48, 110, -0.3, 0, 7);
-      g.fill();
-      g.fillStyle = "#b9745a";
-      g.fillRect(770, 470, 110, 120);
-      const sway = Math.sin(t * 1.2) * 6,
-        nod = Math.sin(t * 2) * 3;
-      // Shoulders
-      g.fillStyle = "#1f4d3f";
-      g.beginPath();
-      g.ellipse(480 + sway, 730, 310, 215, 0, Math.PI, 0);
-      g.fill();
-      g.fillStyle = "#f4f1ea";
-      g.beginPath();
-      g.moveTo(430 + sway, 520);
-      g.lineTo(480 + sway, 590);
-      g.lineTo(530 + sway, 520);
-      g.fill();
-      // Neck and head
-      g.fillStyle = "#c98f6f";
-      g.fillRect(442 + sway, 430, 76, 96);
-      g.fillStyle = "#dba583";
-      g.beginPath();
-      g.ellipse(480 + sway, 345 + nod, 120, 146, 0, 0, 7);
-      g.fill();
-      // Hair
-      g.fillStyle = "#2c2019";
-      g.beginPath();
-      g.ellipse(480 + sway, 258 + nod, 132, 86, 0, Math.PI, 0);
-      g.fill();
-      g.beginPath();
-      g.ellipse(362 + sway, 290 + nod, 22, 62, 0.1, 0, 7);
-      g.ellipse(598 + sway, 290 + nod, 22, 62, -0.1, 0, 7);
-      g.fill();
-      // Face
-      g.fillStyle = "#2a1f19";
-      g.beginPath();
-      g.arc(436 + sway, 348 + nod, 9, 0, 7);
-      g.arc(524 + sway, 348 + nod, 9, 0, 7);
-      g.fill();
-      g.strokeStyle = "#2c2019";
-      g.lineWidth = 6;
-      g.lineCap = "round";
-      g.beginPath();
-      g.moveTo(414 + sway, 318 + nod);
-      g.lineTo(456 + sway, 312 + nod);
-      g.moveTo(504 + sway, 312 + nod);
-      g.lineTo(546 + sway, 318 + nod);
-      g.stroke();
-      g.strokeStyle = "#8a4b3a";
-      g.beginPath();
-      g.arc(480 + sway, 398 + nod, 36, 0.25, Math.PI - 0.25);
-      g.stroke();
-    };
-    return { c, draw };
-  };
-  // A live camera for the recorder preview.
-  window.__presenter = () => {
-    const { c, draw } = make();
-    const started = performance.now();
-    draw(0);
-    setInterval(() => draw((performance.now() - started) / 1000), 33);
-    return c.captureStream(30);
-  };
-  // One frame at a given moment, for the demo recordings.
-  let still;
-  window.__presenterFrame = (t) => {
-    still ||= make();
-    still.draw(t);
-    return still.c.toDataURL("image/jpeg", 0.9);
+  const original = navigator.mediaDevices?.getUserMedia?.bind(
+    navigator.mediaDevices,
+  );
+  if (!original) return;
+  navigator.mediaDevices.getUserMedia = async (constraints) => {
+    if (!constraints?.video) return original(constraints);
+    const video = document.createElement("video");
+    video.src = "/__presenter.mp4";
+    video.muted = true;
+    video.loop = true;
+    video.playsInline = true;
+    await video.play();
+    window.__presenterVideo = video;
+    return video.captureStream();
   };
 };
 
@@ -237,14 +161,41 @@ try {
     deviceScaleFactor: 2,
   });
   await context.addInitScript(presenterScript);
-  await context.addInitScript(() => {
-    const original = navigator.mediaDevices?.getUserMedia?.bind(
-      navigator.mediaDevices,
-    );
-    if (original)
-      navigator.mediaDevices.getUserMedia = async (c) =>
-        c && c.video ? window.__presenter() : original(c);
-  });
+  // The recorder preview holds one good frame of the clip, so the shot is repeatable.
+  const presenterStill = path.join(data, "presenter-still.mp4");
+  execFileSync(ffmpeg, [
+    "-y",
+    "-loglevel",
+    "error",
+    "-ss",
+    "1",
+    "-i",
+    presenterClip,
+    "-frames:v",
+    "1",
+    path.join(data, "presenter-still.png"),
+  ]);
+  execFileSync(ffmpeg, [
+    "-y",
+    "-loglevel",
+    "error",
+    "-loop",
+    "1",
+    "-framerate",
+    "30",
+    "-t",
+    "4",
+    "-i",
+    path.join(data, "presenter-still.png"),
+    "-c:v",
+    "libx264",
+    "-pix_fmt",
+    "yuv420p",
+    presenterStill,
+  ]);
+  await context.route("**/__presenter.mp4", (route) =>
+    route.fulfill({ path: presenterStill, contentType: "video/mp4" }),
+  );
   const page = await context.newPage();
   page.on("pageerror", (e) => console.error("Page error:", e.message));
   await send("/api/profile", { name: "Alex Rivera" }, "PUT");
@@ -594,11 +545,30 @@ try {
     await closed;
     return readFileSync(file);
   };
-  const camera = await encode(
+  // The camera track is the clip played backwards then forwards, so it runs for the
+  // whole demo without a jump.
+  execFileSync(ffmpeg, [
+    "-y",
+    "-loglevel",
+    "error",
+    "-i",
+    presenterClip,
+    "-filter_complex",
+    "[0:v]split[a][b];[a]reverse[r];[r][b]concat=n=2:v=1,scale=960:720,fps=30[v]",
+    "-map",
+    "[v]",
+    "-t",
+    String(LENGTH),
+    "-c:v",
+    "libvpx",
+    "-b:v",
+    "4M",
+    "-pix_fmt",
+    "yuv420p",
+    "-an",
     path.join(data, "camera.webm"),
-    (t) => page.evaluate((t) => window.__presenterFrame(t), t),
-    LENGTH,
-  );
+  ]);
+  const camera = readFileSync(path.join(data, "camera.webm"));
   execFileSync(ffmpeg, [
     "-y",
     "-loglevel",
@@ -646,7 +616,7 @@ try {
     }
     const pointers = d.pointer
       ? // Only while it is on the move or resting: an idle pointer is not a moment.
-        Array.from({ length: 58 }, (_, k) => ({
+        Array.from({ length: 52 }, (_, k) => ({
           time: 3 + k / 10,
           ...pointerAt(3 + k / 10),
         }))
@@ -718,8 +688,8 @@ try {
     {
       id: "chapter",
       type: "chapter",
-      start: 9.2,
-      end: 11.6,
+      start: 8.6,
+      end: 11,
       text: "02 · Share links",
       color: "#d6f475",
     },
@@ -735,7 +705,7 @@ try {
       color: "#ff5a36",
     },
   ];
-  project.scenes = [{ id: "side", start: 9.2, end: 12.2, preset: "side" }];
+  project.scenes = [{ id: "side", start: 8.6, end: 11.8, preset: "side" }];
   await send(`/api/videos/${id}/project`, project, "PUT");
   // Cut the "Um", the way you would in the Transcript tab.
   const um = words.find((w) => w.text === "Um");
@@ -800,7 +770,7 @@ try {
     );
     await page.waitForTimeout(900);
   };
-  await seek(2.6);
+  await seek(1);
   await page.mouse.move(700, 880);
   await shot("editor.png");
   const tabs = page.locator(".studio-tabs");
@@ -835,7 +805,7 @@ try {
     (v) =>
       new Promise((done) => {
         v.addEventListener("seeked", done, { once: true });
-        v.currentTime = 2.6;
+        v.currentTime = 1;
       }),
   );
   await viewer.waitForTimeout(1500);
@@ -921,9 +891,9 @@ try {
       "1",
       path.join(data, name),
     ]);
-  frame(2.4, "f1.png");
-  frame(10.4, "f2.png");
-  frame(6.6, "f3.png");
+  frame(1, "f1.png");
+  frame(9, "f2.png");
+  frame(4.65, "f3.png");
   execFileSync(ffmpeg, [
     "-y",
     "-loglevel",

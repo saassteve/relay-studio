@@ -267,7 +267,7 @@ npm run desktop:dist # build the DMGs into release/
 
 Tests: `npm test` (API and rendering), `npm run test:e2e` (Chrome), `npm run test:desktop` (Electron). Self-hosting, settings and integrations are in [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md).
 
-Every image on this page is made by `node scripts/screenshots.mjs`, which records demo videos and renders them with Relay itself.
+Every image on this page is made by `node scripts/screenshots.mjs`, which builds demo recordings and renders them with Relay itself. The presenter is an AI-generated stand-in, not a real person.
 
 ## Contributing
 
