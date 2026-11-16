@@ -58,10 +58,7 @@ curl -fsSL https://raw.githubusercontent.com/saassteve/relay-studio/main/install
 
 1. **Download** the version for your Mac using the buttons above. Not sure which? Open the **Apple menu → About This Mac**. "Chip: Apple M…" means Apple Silicon; "Processor: Intel" means Intel.
 2. **Open the DMG** and drag **Relay** into **Applications**.
-3. **Open Relay.** Relay isn't notarized by Apple yet, so the first time macOS says it can't check the app:
-   - Click **Done**.
-   - Open **System Settings → Privacy & Security**, scroll down and click **Open Anyway** next to "Relay was blocked".
-   - Click **Open Anyway** again and enter your password. You only do this once.
+3. **Open Relay.** It is signed and notarized by Apple, so it opens like any other app. The first time, macOS asks you to confirm that you want to open an app downloaded from the internet.
 
 </details>
 
@@ -250,7 +247,7 @@ Share links from the Mac app point to your own computer, so they work while Rela
 ## Good to know
 
 - On-device transcription and summaries need an Apple Silicon Mac. On Intel Macs everything else works, and you can import captions.
-- The app isn't notarized by Apple yet, hence the one-time "Open Anyway" step. The Terminal installer avoids it.
+- The app is signed with a Developer ID and notarized by Apple. `npm run desktop:release` does the same for your own builds.
 
 ## Run from source
 

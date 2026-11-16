@@ -8,6 +8,8 @@ set -eu
 main() {
 REPO="saassteve/relay-studio"
 BASE="https://github.com/$REPO/releases/latest/download"
+# The Apple Developer team that signs official builds.
+TEAM="KDN7P432GJ"
 
 fail() {
   printf '\n✗ %s\n' "$1" >&2
@@ -71,6 +73,13 @@ ditto "$MOUNT/Relay.app" "$STAGE" || {
   rm -rf "$STAGE"
   fail "Couldn't copy Relay into $DEST. Is the disk full?"
 }
+# Relay is signed with its Developer ID and notarized by Apple. Make sure this copy
+# is the real thing before it replaces anything.
+codesign --verify --deep --strict "$STAGE" 2>/dev/null &&
+  codesign -dv "$STAGE" 2>&1 | grep -q "^TeamIdentifier=$TEAM\$" || {
+  rm -rf "$STAGE"
+  fail "This download isn't signed by Relay's developer. Nothing was installed."
+}
 if pgrep -xq Relay; then
   printf '→ Closing the running copy of Relay…\n'
   osascript -e 'quit app "Relay"' >/dev/null 2>&1 || true
@@ -82,10 +91,6 @@ if pgrep -xq Relay; then
 fi
 rm -rf "$APP"
 mv "$STAGE" "$APP" || fail "Couldn't move Relay into place in $DEST."
-
-# Relay isn't notarized by Apple yet. Clearing the download flag lets it open
-# without the "unidentified developer" prompt. Its source is public on GitHub.
-xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
 
 printf '✓ Relay is installed in %s. Opening it now…\n' "$DEST"
 open "$APP"
