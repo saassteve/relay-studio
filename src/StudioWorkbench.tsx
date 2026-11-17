@@ -1,6 +1,7 @@
 import { radio, tab as tabAttrs, tabPanel } from "./Modal";
 import {
   forwardRef,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useRef,
@@ -11,11 +12,19 @@ import { Timeline } from "./Timeline";
 import { LookControls, NumberField, Slider } from "./LookPanel";
 import { insertSpan, removeSpan, swapSpans } from "./retime";
 import { AssistCard } from "./AssistCard";
+import {
+  DEFAULT_TEXT_SIZE,
+  MAX_EFFECTS,
+  TEXT_ANIMATIONS,
+  TEXT_STYLES,
+  ZOOM_MOTIONS,
+} from "../shared/editor-effects.mjs";
 const isTitle = (type: string) =>
   type === "title" || type === "lowerthird" || type === "chapter";
 import {
   ArrowDown,
   ArrowUp,
+  Copy,
   Download,
   FileText,
   LoaderCircle,
@@ -29,6 +38,7 @@ import {
   Play,
   Palette,
   Send,
+  WandSparkles,
 } from "lucide-react";
 import {
   api,
@@ -42,6 +52,18 @@ import {
 } from "./types";
 import { awaitJob } from "./drafts";
 const freshId = () => crypto.randomUUID();
+type Overlay = Project["overlays"][number];
+const EFFECTS = ["zoom", "text", "arrow", "box", "blur", "cursor"] as const;
+const EFFECT_CHOICES = {
+  smooth: "Smooth",
+  quick: "Quick",
+  cut: "Instant",
+  label: "Dark label",
+  outline: "Outlined",
+  plain: "Plain",
+  none: "None",
+  fade: "Fade in and out",
+};
 export type WorkbenchHandle = DraftPlayerHandle & {
   // Renders the current edits into the shared video; false if it didn't finish.
   publish: () => Promise<boolean>;
@@ -129,41 +151,17 @@ export const StudioWorkbench = forwardRef<
     >([]),
     [chosen, setChosen] = useState<number[]>([]),
     [context, setContext] = useState(""),
-    [format, setFormat] = useState("message");
-  // The preview and tabs stay pinned, smaller, while the tools below are scrolled.
-  const sentinel = useRef<HTMLDivElement>(null),
-    dock = useRef<HTMLDivElement>(null);
-  const ready = Boolean(project && state);
+    [format, setFormat] = useState("message"),
+    [picked, setPicked] = useState<{ id: string; reveal?: boolean } | null>(
+      null,
+    );
+  const workbench = useRef<HTMLElement>(null);
   useEffect(() => {
-    const mark = sentinel.current,
-      box = dock.current;
-    if (!mark || !box || !("IntersectionObserver" in window)) return;
-    const watch = new IntersectionObserver(([entry]) => {
-      const stuck =
-        !entry.isIntersecting &&
-        entry.boundingClientRect.top < 0 &&
-        innerWidth > 900 &&
-        innerHeight > 640;
-      if (stuck === box.classList.contains("is-stuck")) return;
-      if (stuck) {
-        // Keep the page the same length so nothing jumps as the preview shrinks.
-        const full = box.offsetHeight;
-        box.classList.add("is-stuck");
-        box.style.marginBottom = `${full - box.offsetHeight}px`;
-        // Focused controls scroll into view below the pinned preview, not under it.
-        document.documentElement.style.scrollPaddingTop = `${box.offsetHeight + 12}px`;
-      } else {
-        box.classList.remove("is-stuck");
-        box.style.marginBottom = "";
-        document.documentElement.style.scrollPaddingTop = "";
-      }
-    });
-    watch.observe(mark);
-    return () => {
-      watch.disconnect();
-      document.documentElement.style.scrollPaddingTop = "";
-    };
-  }, [ready]);
+    if (!picked || picked.reveal === false) return;
+    workbench.current
+      ?.querySelector(".stage")
+      ?.scrollIntoView({ block: "start" });
+  }, [picked]);
   const anchorWord = useRef<number | null>(null),
     marker = useRef<HTMLElement>(null),
     importCaptions = useRef<HTMLInputElement>(null);
@@ -205,6 +203,14 @@ export const StudioWorkbench = forwardRef<
     setDirty(true);
   };
   const total = project?.segments.reduce((n, s) => n + s.end - s.start, 0) || 0;
+  const trackTime = useCallback(
+    (t: number) => {
+      if (marker.current && total)
+        marker.current.style.left = `${Math.min(100, (t / total) * 100)}%`;
+      onTime?.(t);
+    },
+    [total, onTime],
+  );
   // Where a section began and ended when a trim handle was picked up.
   const trimFrom = useRef<{
     i: number;
@@ -669,12 +675,55 @@ export const StudioWorkbench = forwardRef<
       );
       setWordSelection([]);
     });
-  // New titles and effects start where the playhead is.
+  // Leave a playable range even when adding an effect at the final frame.
+  const rangeAt = (time: number, length: number) => {
+    const start = Math.max(0, Math.min(time, total - 0.5));
+    return { start, end: Math.min(total, start + length) };
+  };
   const at = () =>
     +Math.max(0, Math.min(total - 1, player.current?.time() ?? 0)).toFixed(1);
-  const overlayRow = (o: Project["overlays"][number], i: number) => (
+  const showEffect = (o: Overlay) => {
+    player.current?.pause();
+    onSeek(o.start + Math.min(0.5, (o.end - o.start) / 2));
+  };
+  const addOverlay = (
+    type: Overlay["type"],
+    text = "",
+    sub?: string,
+    original?: Overlay,
+  ) => {
+    const p = latest.current;
+    if (!p || p.overlays.length >= MAX_EFFECTS) return;
+    const time = Math.max(player.current?.time() ?? 0, original?.end ?? 0);
+    const length = original
+      ? original.end - original.start
+      : type === "lowerthird" || type === "chapter"
+        ? 5
+        : 3;
+    const o: Overlay = {
+      type,
+      x: type === "zoom" ? 0.5 : 0.1,
+      y: type === "zoom" ? 0.5 : 0.15,
+      w: 0.3,
+      h: 0.15,
+      scale: 1.8,
+      text,
+      sub,
+      color: "#d6f475",
+      ...original,
+      ...rangeAt(time, length),
+      id: freshId(),
+      auto: undefined,
+    };
+    edit((p) => p.overlays.push(o));
+    showEffect(o);
+    setPicked({ id: o.id });
+  };
+  const pickedIndex = project.overlays.findIndex((o) => o.id === picked?.id);
+  const atEffectLimit = project.overlays.length >= MAX_EFFECTS;
+  const overlayRow = (o: Overlay, i: number) => (
     <div
-      className="effect-row"
+      className={`effect-row${picked?.id === o.id ? " is-picked" : ""}`}
       key={o.id}
       role="group"
       aria-labelledby={`fx-${o.id}`}
@@ -686,25 +735,108 @@ export const StudioWorkbench = forwardRef<
           <small className="muted effect-tip">
             {o.type === "zoom"
               ? "Pause on it, then drag the circle in the preview to aim the zoom."
-              : "Pause on it, then drag it in the preview to place it."}
+              : o.type === "text"
+                ? "Double-click the text to edit. Drag to move."
+                : "Drag in the preview to place it."}
           </small>
         )}
       </strong>
-      {(o.type === "text" || isTitle(o.type)) && (
+      {o.type === "text" && (
+        <details className="inspector-copy">
+          <summary>Edit wording</summary>
+          <textarea
+            aria-label="Words"
+            rows={2}
+            value={o.text}
+            maxLength={500}
+            onChange={(e) => edit((p) => (p.overlays[i].text = e.target.value))}
+          />
+        </details>
+      )}
+      {isTitle(o.type) && (
         <label className="effect-text">
           {o.type === "lowerthird"
             ? "Name"
             : o.type === "chapter"
               ? "Label"
-              : o.type === "title"
-                ? "Title"
-                : "Words"}
+              : "Title"}
           <input
             value={o.text}
             maxLength={500}
             onChange={(e) => edit((p) => (p.overlays[i].text = e.target.value))}
           />
         </label>
+      )}
+      {o.type !== "zoom" && o.type !== "blur" && (
+        <label>
+          Colour
+          <input
+            aria-label={`${OVERLAY_NAMES[o.type]} colour`}
+            title="Colour"
+            type="color"
+            value={o.color}
+            onChange={(e) =>
+              edit((p) => (p.overlays[i].color = e.target.value))
+            }
+          />
+        </label>
+      )}
+      {o.type === "text" && (
+        <>
+          <label>
+            Text style
+            <select
+              value={o.textStyle || "label"}
+              onChange={(e) =>
+                edit(
+                  (p) =>
+                    (p.overlays[i].textStyle = e.target
+                      .value as Overlay["textStyle"]),
+                )
+              }
+            >
+              {TEXT_STYLES.map((style) => (
+                <option key={style} value={style}>
+                  {EFFECT_CHOICES[style]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Text size (% of frame height)
+            <NumberField
+              min={2}
+              max={12}
+              step="0.5"
+              value={
+                o.textSize
+                  ? o.textSize * 100
+                  : Math.max(18 / project.layout.height, DEFAULT_TEXT_SIZE) *
+                    100
+              }
+              onCommit={(n) => edit((p) => (p.overlays[i].textSize = n / 100))}
+            />
+          </label>
+          <label>
+            Text animation
+            <select
+              value={o.animation || "none"}
+              onChange={(e) =>
+                edit(
+                  (p) =>
+                    (p.overlays[i].animation = e.target
+                      .value as Overlay["animation"]),
+                )
+              }
+            >
+              {TEXT_ANIMATIONS.map((animation) => (
+                <option key={animation} value={animation}>
+                  {EFFECT_CHOICES[animation]}
+                </option>
+              ))}
+            </select>
+          </label>
+        </>
       )}
       {o.type === "arrow" && (
         <label>
@@ -731,122 +863,157 @@ export const StudioWorkbench = forwardRef<
           />
         </label>
       )}
-      <label>
-        Starts at (sec)
-        <NumberField
-          min={0}
-          max={total}
-          step=".1"
-          value={o.start}
-          valid={(n) => n < o.end}
-          onCommit={(n) => edit((p) => (p.overlays[i].start = n))}
-        />
-      </label>
-      <label>
-        Ends at (sec)
-        <NumberField
-          min={0}
-          max={total}
-          step=".1"
-          value={o.end}
-          valid={(n) => n > o.start}
-          onCommit={(n) => edit((p) => (p.overlays[i].end = n))}
-        />
-      </label>
-      {!isTitle(o.type) && (
-        <details className="cut-more effect-position">
-          <summary>Exact position</summary>
-          <div className="effect-fields">
-            {(o.type === "blur" || o.type === "box"
-              ? (["x", "y", "w", "h"] as const)
-              : (["x", "y"] as const)
-            ).map((key) => (
-              <label key={key}>
-                {{ x: "Left", y: "Top", w: "Width", h: "Height" }[key]} %
-                <NumberField
-                  min={key === "x" || key === "y" ? 0 : 1}
-                  max={
-                    key === "x" || key === "y"
-                      ? o.type === "zoom"
-                        ? 100
-                        : 95
-                      : 100
-                  }
-                  value={Math.round(o[key] * 100)}
-                  onCommit={(n) => edit((p) => (p.overlays[i][key] = n / 100))}
-                />
-              </label>
-            ))}
-          </div>
-        </details>
-      )}
       {o.type === "zoom" && (
-        <label>
-          Zoom ×
-          <NumberField
-            min={1}
-            max={4}
-            step=".1"
-            value={o.scale}
-            onCommit={(n) => edit((p) => (p.overlays[i].scale = n))}
-          />
-        </label>
+        <>
+          <label>
+            Zoom ×
+            <NumberField
+              min={1}
+              max={4}
+              step=".1"
+              value={o.scale}
+              onCommit={(n) => edit((p) => (p.overlays[i].scale = n))}
+            />
+          </label>
+          <label>
+            Zoom motion
+            <select
+              value={o.motion || "smooth"}
+              onChange={(e) =>
+                edit(
+                  (p) =>
+                    (p.overlays[i].motion = e.target
+                      .value as Overlay["motion"]),
+                )
+              }
+            >
+              {ZOOM_MOTIONS.map((motion) => (
+                <option key={motion} value={motion}>
+                  {EFFECT_CHOICES[motion]}
+                </option>
+              ))}
+            </select>
+          </label>
+        </>
       )}
-      <input
-        aria-label={`${OVERLAY_NAMES[o.type]} colour`}
-        title="Colour"
-        type="color"
-        value={o.color}
-        onChange={(e) => edit((p) => (p.overlays[i].color = e.target.value))}
-      />
-      <span className="effect-actions">
-        <button
-          className="btn"
-          aria-label={`Start here: ${OVERLAY_NAMES[o.type]}`}
-          onClick={() =>
-            edit((p) => {
-              const length = Math.max(1, o.end - o.start);
-              p.overlays[i].start = at();
-              p.overlays[i].end = +Math.min(total, at() + length).toFixed(1);
-            })
-          }
-        >
-          Start here
-        </button>
-        <button
-          className="btn"
-          aria-label={`End here: ${OVERLAY_NAMES[o.type]}`}
-          onClick={() =>
-            edit((p) => {
-              p.overlays[i].end = +Math.max(
-                p.overlays[i].start + 0.5,
-                player.current?.time() ?? 0,
-              ).toFixed(1);
-            })
-          }
-        >
-          End here
-        </button>
-        <button
-          className="btn"
-          aria-label={`Go to it: ${OVERLAY_NAMES[o.type]}`}
-          onClick={() => onSeek(o.start + 0.05)}
-        >
-          Go to it
-        </button>
-      </span>
+      <details className="inspector-timing">
+        <summary>Timing and position</summary>
+        <div>
+          {" "}
+          <label>
+            Starts at (sec)
+            <NumberField
+              min={0}
+              max={total}
+              step=".1"
+              value={o.start}
+              valid={(n) => n < o.end}
+              onCommit={(n) => edit((p) => (p.overlays[i].start = n))}
+            />
+          </label>
+          <label>
+            Ends at (sec)
+            <NumberField
+              min={0}
+              max={total}
+              step=".1"
+              value={o.end}
+              valid={(n) => n > o.start}
+              onCommit={(n) => edit((p) => (p.overlays[i].end = n))}
+            />
+          </label>
+          {!isTitle(o.type) && (
+            <details className="cut-more effect-position">
+              <summary>Exact position</summary>
+              <div className="effect-fields">
+                {(o.type === "blur" || o.type === "box"
+                  ? (["x", "y", "w", "h"] as const)
+                  : (["x", "y"] as const)
+                ).map((key) => (
+                  <label key={key}>
+                    {{ x: "Left", y: "Top", w: "Width", h: "Height" }[key]} %
+                    <NumberField
+                      min={key === "x" || key === "y" ? 0 : 1}
+                      max={
+                        key === "x" || key === "y"
+                          ? o.type === "zoom"
+                            ? 100
+                            : 95
+                          : 100
+                      }
+                      value={Math.round(o[key] * 100)}
+                      onCommit={(n) =>
+                        edit((p) => (p.overlays[i][key] = n / 100))
+                      }
+                    />
+                  </label>
+                ))}
+              </div>
+            </details>
+          )}
+          <span className="effect-actions">
+            <button
+              className="btn"
+              aria-label={`Start here: ${OVERLAY_NAMES[o.type]}`}
+              onClick={() =>
+                edit((p) => {
+                  Object.assign(
+                    p.overlays[i],
+                    rangeAt(player.current?.time() ?? 0, o.end - o.start),
+                  );
+                })
+              }
+            >
+              Start here
+            </button>
+            <button
+              className="btn"
+              aria-label={`End here: ${OVERLAY_NAMES[o.type]}`}
+              onClick={() =>
+                edit((p) => {
+                  p.overlays[i].end = Math.min(
+                    total,
+                    Math.max(o.start + 0.1, player.current?.time() ?? 0),
+                  );
+                })
+              }
+            >
+              End here
+            </button>
+            <button
+              className="btn"
+              aria-label={`Go to it: ${OVERLAY_NAMES[o.type]}`}
+              onClick={() => {
+                setPicked({ id: o.id, reveal: false });
+                showEffect(o);
+                workbench.current
+                  ?.querySelector(".stage")
+                  ?.scrollIntoView({ block: "start" });
+              }}
+            >
+              Go to it
+            </button>
+          </span>
+        </div>
+      </details>
+      <button
+        className="icon-button"
+        title="Duplicate after this effect or at the playhead"
+        aria-label={`Duplicate ${OVERLAY_NAMES[o.type]}`}
+        disabled={atEffectLimit}
+        onClick={() => addOverlay(o.type, o.text, o.sub, o)}
+      >
+        <Copy size={15} />
+      </button>
       <button
         className="icon-button danger"
         aria-label={`Remove ${OVERLAY_NAMES[o.type]}`}
-        onClick={(e) => {
-          // Leave the keyboard on the card's first add button once the row is gone.
-          const card = e.currentTarget.closest(".look-card");
+        onClick={() => {
+          const timeline =
+            workbench.current?.querySelector<HTMLElement>(".tl-clips button");
           edit((p) => p.overlays.splice(i, 1));
-          card
-            ?.querySelector<HTMLElement>(
-              ".title-add button, .effect-add button",
-            )
-            ?.focus();
+          setPicked(null);
+          timeline?.focus({ preventScroll: true });
         }}
       >
         <Trash2 size={15} />
@@ -856,25 +1023,22 @@ export const StudioWorkbench = forwardRef<
   return (
     <section
       className="studio-workbench"
+      ref={workbench}
       style={{
         ["--ratio" as string]: project.layout.width / project.layout.height,
       }}
     >
-      <div className="preview-sentinel" ref={sentinel} />
-      <div className="preview-dock" ref={dock}>
+      <div>
         <div className="stage">
           <DraftPlayer
             ref={player}
             project={project}
             videoId={clip.id}
             hasCamera={hasCameraTrack}
+            focusOverlayId={picked?.id}
+            onPickOverlay={(id) => setPicked({ id, reveal: false })}
             words={sourceId === clip.id ? words : []}
-            onTime={(t) => {
-              // The line on the Cut timeline follows the preview.
-              if (marker.current && total)
-                marker.current.style.left = `${Math.min(100, (t / total) * 100)}%`;
-              onTime?.(t);
-            }}
+            onTime={trackTime}
             onCamera={(position) =>
               edit((p) => Object.assign(p.layout.camera, position))
             }
@@ -902,31 +1066,17 @@ export const StudioWorkbench = forwardRef<
             onMove={moveSection}
             onRemove={removeSection}
             onSplit={splitHere}
+            pickedId={picked?.id}
             onPick={(key) => {
-              // Open the Look tab at this item's settings.
-              setTab("style");
-              setTimeout(() => {
-                const row = document
-                  .getElementById(`fx-${key}`)
-                  ?.closest<HTMLElement>(".effect-row");
-                if (!row) return;
-                row.scrollIntoView({
-                  block: "center",
-                  behavior: matchMedia("(prefers-reduced-motion: reduce)")
-                    .matches
-                    ? "auto"
-                    : "smooth",
-                });
-                // The bar that was used may now be hidden; carry on from its settings.
-                row
-                  .querySelector<HTMLElement>("input,select,button")
-                  ?.focus({ preventScroll: true });
-                row.classList.add("is-picked");
-                setTimeout(() => row.classList.remove("is-picked"), 1600);
-              }, 80);
+              const o = project.overlays.find((effect) => effect.id === key);
+              if (o) showEffect(o);
+              setTab(!o || isTitle(o.type) ? "style" : "effects");
+              setPicked({ id: key, reveal: false });
             }}
           />
         </div>
+        {pickedIndex >= 0 &&
+          overlayRow(project.overlays[pickedIndex], pickedIndex)}
         <div className="studio-status">
           <div className="actions">
             <button
@@ -1032,6 +1182,7 @@ export const StudioWorkbench = forwardRef<
               ["edit", "Cut", Scissors],
               ["transcript", "Transcript", FileText],
               ["style", "Look", Palette],
+              ["effects", "Effects", WandSparkles],
               ["ai", "AI", Sparkles],
             ] as const
           ).map(([id, label, Icon]) => (
@@ -1811,118 +1962,14 @@ export const StudioWorkbench = forwardRef<
                 <button
                   className="btn small"
                   key={type}
-                  onClick={() =>
-                    edit((p) =>
-                      p.overlays.push({
-                        id: freshId(),
-                        type,
-                        start: at(),
-                        end: Math.min(at() + (type === "title" ? 3 : 5), total),
-                        x: 0.1,
-                        y: 0.1,
-                        w: 0.3,
-                        h: 0.15,
-                        scale: 1.8,
-                        text,
-                        sub,
-                        color: "#d6f475",
-                      }),
-                    )
-                  }
+                  disabled={atEffectLimit}
+                  onClick={() => addOverlay(type, text, sub)}
                 >
                   <Plus size={12} />
                   {label}
                 </button>
               ))}
             </div>
-            {project.overlays.map((o, i) =>
-              isTitle(o.type) ? overlayRow(o, i) : null,
-            )}
-          </section>
-          <section className="look-card wide">
-            <div className="section-heading">
-              <h2>Zoom and highlights</h2>
-              <div className="actions">
-                {project.overlays.some((o) => o.auto) && (
-                  <button
-                    className="text-button small"
-                    onClick={() =>
-                      edit(
-                        (p) => (p.overlays = p.overlays.filter((o) => !o.auto)),
-                      )
-                    }
-                  >
-                    Remove auto-zooms
-                  </button>
-                )}
-                <button
-                  className="text-button small"
-                  onClick={() =>
-                    void action("Finding key moments", async () => {
-                      const effects = await api<Project["overlays"]>(
-                        `/api/videos/${clip.id}/focus-suggestions`,
-                      );
-                      edit((p) => p.overlays.push(...effects));
-                      notify(
-                        effects.length
-                          ? `Added ${effects.length} zoom${effects.length === 1 ? "" : "s"} where you paused to point.`
-                          : "No new key moments found. Pointer data comes from Mac app recordings; add a zoom by hand.",
-                      );
-                    })
-                  }
-                >
-                  Find key moments to zoom
-                </button>
-              </div>
-            </div>
-            <p className="studio-hint">
-              Zoom in on a detail, point at it, or blur something private.
-            </p>
-            <div className="effect-add">
-              {(
-                [
-                  ["zoom", "Zoom"],
-                  ["text", "Text"],
-                  ["arrow", "Arrow"],
-                  ["box", "Outline"],
-                  ["blur", "Blur"],
-                  ["cursor", "Dot"],
-                ] as const
-              ).map(([type, effectLabel]) => (
-                <button
-                  className="btn small"
-                  key={type}
-                  onClick={() =>
-                    edit((p) =>
-                      p.overlays.push({
-                        id: freshId(),
-                        type,
-                        start: at(),
-                        end: Math.min(at() + 3, total),
-                        x: type === "zoom" ? 0.5 : 0.1,
-                        y: type === "zoom" ? 0.5 : 0.15,
-                        w: 0.3,
-                        h: 0.15,
-                        scale: 1.8,
-                        text:
-                          type === "text"
-                            ? "Your text"
-                            : type === "arrow"
-                              ? "→"
-                              : "",
-                        color: "#d6f475",
-                      }),
-                    )
-                  }
-                >
-                  <Plus size={12} />
-                  {effectLabel}
-                </button>
-              ))}
-            </div>
-            {project.overlays.map((o, i) =>
-              !isTitle(o.type) ? overlayRow(o, i) : null,
-            )}
           </section>
           <section className="look-card wide">
             <h2>Button under the video</h2>
@@ -1949,6 +1996,108 @@ export const StudioWorkbench = forwardRef<
                   onChange={(e) => edit((p) => (p.cta.url = e.target.value))}
                 />
               </label>
+            </div>
+          </section>
+        </div>
+      )}
+      {tab === "effects" && (
+        <div
+          className="studio-content look-tab"
+          {...tabPanel("studio-effects")}
+        >
+          <section className="look-card wide">
+            <div className="section-heading">
+              <h2>Zoom and highlights</h2>
+              <div className="actions">
+                {project.overlays.some((o) => o.auto) && (
+                  <button
+                    className="text-button small"
+                    onClick={() =>
+                      edit((p) => {
+                        p.overlays = p.overlays.filter((o) => !o.auto);
+                      })
+                    }
+                  >
+                    Remove auto-zooms
+                  </button>
+                )}
+                <button
+                  className="text-button small"
+                  disabled={atEffectLimit || Boolean(busy)}
+                  onClick={() =>
+                    void action("Finding key moments", async () => {
+                      const snapshot = latest.current;
+                      if (!snapshot) return;
+                      const effects = await api<Overlay[]>(
+                        `/api/videos/${clip.id}/focus-suggestions`,
+                        { method: "POST", body: JSON.stringify(snapshot) },
+                      );
+                      const current = latest.current;
+                      if (
+                        !current ||
+                        JSON.stringify(current.segments) !==
+                          JSON.stringify(snapshot.segments)
+                      ) {
+                        notify(
+                          "The cut changed. Find key moments again to use the new timing.",
+                        );
+                        return;
+                      }
+                      const zooms = current.overlays.filter(
+                        (o) => o.type === "zoom",
+                      );
+                      const additions = effects
+                        .filter(
+                          (z) =>
+                            !zooms.some(
+                              (o) => z.start < o.end && o.start < z.end,
+                            ),
+                        )
+                        .slice(0, MAX_EFFECTS - current.overlays.length);
+                      if (additions.length)
+                        edit((p) => p.overlays.push(...additions));
+                      notify(
+                        additions.length
+                          ? `Added ${additions.length} automatic zoom${additions.length === 1 ? "" : "s"}.`
+                          : "No new key moments found. For automatic zooms, move the pointer to a detail and pause during a Mac recording.",
+                      );
+                    })
+                  }
+                >
+                  Find key moments to zoom
+                </button>
+              </div>
+            </div>
+            <p className="studio-hint">
+              Add an effect at the playhead. Drag its bar to move it, or drag an
+              end to change its duration.
+            </p>
+            {atEffectLimit && (
+              <p className="studio-hint" role="status">
+                This video has the maximum of {MAX_EFFECTS} effects.
+              </p>
+            )}
+            <div className="effect-add">
+              {EFFECTS.map((type) => (
+                <button
+                  className="btn small"
+                  key={type}
+                  disabled={atEffectLimit}
+                  onClick={() =>
+                    addOverlay(
+                      type,
+                      type === "text"
+                        ? "Your text"
+                        : type === "arrow"
+                          ? "→"
+                          : "",
+                    )
+                  }
+                >
+                  <Plus size={12} />
+                  {OVERLAY_NAMES[type]}
+                </button>
+              ))}
             </div>
           </section>
         </div>

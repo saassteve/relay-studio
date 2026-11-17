@@ -12,7 +12,7 @@ interface Item {
   track: number;
 }
 const TITLES = ["title", "lowerthird", "chapter"];
-const TRACKS = ["Titles", "Zoom and highlights", "Layout changes"];
+const TRACKS = ["Titles", "Zooms", "Effects", "Layout"];
 const STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
 // How a drag can end.
 const EVENTS = ["pointerup", "pointercancel", "lostpointercapture"] as const;
@@ -34,6 +34,7 @@ export function Timeline({
   edit,
   marker,
   names,
+  pickedId,
   onPick,
   onTrim,
   onTrimEnd,
@@ -51,6 +52,7 @@ export function Timeline({
   marker: RefObject<HTMLElement | null>;
   names: Record<string, string>;
   // A bar was clicked: show its settings.
+  pickedId?: string;
   onPick?: (key: string) => void;
   // One end of a section is being moved to `to` seconds of its footage. Called as
   // the handle moves; onTrimEnd is called once when it is let go.
@@ -120,7 +122,7 @@ export function Timeline({
         (TITLES.includes(o.type) || o.type === "text") && o.text.trim()
           ? o.text.trim()
           : names[o.type] || o.type,
-      track: TITLES.includes(o.type) ? 0 : 1,
+      track: TITLES.includes(o.type) ? 0 : o.type === "zoom" ? 1 : 2,
     })),
     ...(project.scenes || []).map((s, index) => ({
       key: s.id,
@@ -129,7 +131,7 @@ export function Timeline({
       start: s.start,
       end: s.end,
       label: PRESETS.find((p) => p.id === s.preset)?.label || "Layout",
-      track: 2,
+      track: 3,
     })),
   ];
   // Bars that overlap in time sit on separate rows of their track.
@@ -153,9 +155,9 @@ export function Timeline({
         item.kind === "overlay"
           ? p.overlays[item.index]
           : p.scenes?.[item.index];
-      if (!target) return;
-      target.start = +start.toFixed(1);
-      target.end = +end.toFixed(1);
+      if (!target || end <= start) return;
+      target.start = start;
+      target.end = end;
     });
   const drag =
     (item: Item, mode: "move" | "start" | "end") =>
@@ -189,19 +191,17 @@ export function Timeline({
             Math.min(total, Math.max(item.start + 0.5, item.end + by)),
           );
       };
-      const stop = () => {
+      const stop = (ev: Event) => {
         target.removeEventListener("pointermove", move);
-        target.removeEventListener("pointerup", stop);
-        target.removeEventListener("pointercancel", stop);
+        for (const type of EVENTS) target.removeEventListener(type, stop);
         // A plain click jumps to the bar and opens its settings instead.
-        if (!moved) {
+        if (!moved && ev.type === "pointerup") {
           onSeek(item.start + 0.05);
           onPick?.(item.key);
         }
       };
       target.addEventListener("pointermove", move);
-      target.addEventListener("pointerup", stop);
-      target.addEventListener("pointercancel", stop);
+      for (const type of EVENTS) target.addEventListener(type, stop);
     };
   // Drag one end of a section to trim it. The preview shows the frame at that end.
   const trim =
@@ -325,11 +325,7 @@ export function Timeline({
         <span style={{ height: 32 }}>Video</span>
         {tracks.map((track) => (
           <span key={track.name} style={{ height: track.rows * 26 + 2 }}>
-            {track.name === "Zoom and highlights"
-              ? "Effects"
-              : track.name === "Layout changes"
-                ? "Layout"
-                : track.name}
+            {track.name}
           </span>
         ))}
       </div>
@@ -463,6 +459,7 @@ export function Timeline({
             {track.bars.map((bar) => (
               <button
                 key={bar.key}
+                aria-pressed={bar.key === pickedId}
                 className={`tl-bar track-${bar.track}`}
                 style={{
                   left: pct(bar.start),

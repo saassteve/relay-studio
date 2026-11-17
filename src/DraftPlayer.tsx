@@ -10,6 +10,11 @@ import {
 import { Pause, Play, Volume2, VolumeX } from "lucide-react";
 import { clock, type Project, type Word } from "./types";
 import {
+  DEFAULT_TEXT_SIZE,
+  textFade,
+  zoomAt,
+} from "../shared/editor-effects.mjs";
+import {
   onScreen,
   planLayout,
   type Box,
@@ -29,6 +34,79 @@ const pct = (n: number, of: number) => `${(n / of) * 100}%`;
 const clamp = (n: number, low: number, high: number) =>
   +Math.min(high, Math.max(low, n)).toFixed(3);
 
+function CanvasText({
+  value,
+  label,
+  maxLength,
+  onSelect,
+  onSave,
+}: {
+  value: string;
+  label: string;
+  maxLength: number;
+  onSelect: () => void;
+  onSave: (value: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const input = useRef<HTMLTextAreaElement>(null);
+  const cancelled = useRef(false);
+  useEffect(() => {
+    if (editing) {
+      input.current?.focus({ preventScroll: true });
+      input.current?.select();
+    }
+  }, [editing]);
+  if (!editing)
+    return (
+      <span
+        className="canvas-text-target"
+        title="Double-click to edit text"
+        onClick={(e) => {
+          e.stopPropagation();
+          onSelect();
+        }}
+        onDoubleClick={(e) => {
+          e.stopPropagation();
+          onSelect();
+          cancelled.current = false;
+          setEditing(true);
+        }}
+      >
+        {value || " "}
+      </span>
+    );
+  return (
+    <textarea
+      ref={input}
+      className="canvas-text-input"
+      aria-label={label}
+      rows={Math.min(5, value.split("\n").length)}
+      maxLength={maxLength}
+      defaultValue={value}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.nativeEvent.isComposing) return;
+        if (
+          e.key === "Escape" ||
+          (e.key === "Enter" && (e.metaKey || e.ctrlKey))
+        ) {
+          e.preventDefault();
+          cancelled.current = e.key === "Escape";
+          e.currentTarget.blur();
+        }
+      }}
+      onBlur={(e) => {
+        if (!cancelled.current && e.target.value !== value)
+          onSave(e.target.value);
+        setEditing(false);
+      }}
+    />
+  );
+}
+
 // Plays the video exactly as currently edited, straight from the original tracks:
 // cuts are skipped, layouts change, zooms ease in, and titles and captions appear.
 // Nothing needs rendering to see an edit.
@@ -38,18 +116,30 @@ export const DraftPlayer = forwardRef<
     project: Project;
     videoId: string;
     hasCamera: boolean;
+    focusOverlayId?: string;
+    onPickOverlay?: (id: string) => void;
     words: Word[];
     onTime?: (t: number) => void;
     // Called while an effect is dragged or resized in the preview.
     onOverlay?: (
       id: string,
-      patch: Partial<Pick<Overlay, "x" | "y" | "w" | "h">>,
+      patch: Partial<Pick<Overlay, "x" | "y" | "w" | "h" | "text" | "sub">>,
     ) => void;
     // Called while the camera bubble is dragged to a new spot.
     onCamera?: (position: { x: number; y: number }) => void;
   }
 >(function DraftPlayer(
-  { project, videoId, hasCamera, words, onTime, onOverlay, onCamera },
+  {
+    project,
+    videoId,
+    hasCamera,
+    focusOverlayId,
+    onPickOverlay,
+    words,
+    onTime,
+    onOverlay,
+    onCamera,
+  },
   ref,
 ) {
   const screen = useRef<HTMLVideoElement>(null),
@@ -193,9 +283,14 @@ export const DraftPlayer = forwardRef<
     .findLast((s) => t >= s.start && t < s.end);
   const preset = (scene?.preset || l.preset || "pip") as LayoutPreset;
   const plan = planLayout(l, preset, aspect, hasCamera && !cameraMissing);
-  const zoom = project.overlays.find(
-    (o) => o.type === "zoom" && t >= o.start && t < o.end,
+  const zooms = useMemo(
+    () => project.overlays.filter((o) => o.type === "zoom"),
+    [project.overlays],
   );
+  const activeZooms = zooms.filter((o) => t >= o.start && t < o.end);
+  const zoom =
+    activeZooms.find((o) => o.id === focusOverlayId) ?? activeZooms.at(-1);
+  const view = zoomAt(zooms, t);
   const titles = project.overlays.filter(
     (o) =>
       (o.type === "title" || o.type === "lowerthird" || o.type === "chapter") &&
@@ -224,12 +319,13 @@ export const DraftPlayer = forwardRef<
       .map((o) => [o.id, onScreen(o, resting.screen, l.width, l.height)]),
   );
   const effects = showing.filter((o) => !held.get(o.id));
-  const zoomed: React.CSSProperties | undefined = zoom
-    ? {
-        transform: `scale(${zoom.scale})`,
-        transformOrigin: `${zoom.x * 100}% ${zoom.y * 100}%`,
-      }
-    : undefined;
+  const zoomed: React.CSSProperties | undefined =
+    view.scale > 1
+      ? {
+          transform: `scale(${view.scale})`,
+          transformOrigin: `${view.x * 100}% ${view.y * 100}%`,
+        }
+      : undefined;
   // Drag an effect to move it, or its corner to resize it. "focus" moves the point a
   // zoom closes in on, which is measured inside the screen picture.
   const drag =
@@ -239,13 +335,14 @@ export const DraftPlayer = forwardRef<
       if (!onOverlay || !area) return;
       e.preventDefault();
       e.stopPropagation();
-      const target = e.currentTarget,
+      const target =
+          e.target instanceof HTMLElement ? e.target : e.currentTarget,
         from = { x: e.clientX, y: e.clientY },
         start = { x: o.x, y: o.y, w: o.w, h: o.h },
         // A blur on the screen picture is as large as the picture shows it.
         grown =
           held.get(o.id) && plan.screen && resting.screen
-            ? (plan.screen.w / resting.screen.w) * (zoom?.scale || 1)
+            ? (plan.screen.w / resting.screen.w) * view.scale
             : 1,
         within =
           mode === "focus" && plan.screen
@@ -278,6 +375,23 @@ export const DraftPlayer = forwardRef<
       target.addEventListener("pointerup", stop);
       target.addEventListener("pointercancel", stop);
     };
+  const canvasText = (o: Overlay, field: "text" | "sub" = "text") =>
+    onOverlay ? (
+      <CanvasText
+        value={o[field] ?? ""}
+        label={
+          field === "text" ? "Edit text in preview" : "Edit subtitle in preview"
+        }
+        maxLength={field === "text" ? 500 : 200}
+        onSelect={() => {
+          pause();
+          onPickOverlay?.(o.id);
+        }}
+        onSave={(value) => onOverlay(o.id, { [field]: value })}
+      />
+    ) : (
+      o[field]
+    );
   const still = (e: React.MouseEvent) => e.stopPropagation();
   // The camera bubble can be picked up and put anywhere in the frame.
   const movable = Boolean(onCamera && plan.preset === "pip" && plan.camera);
@@ -443,39 +557,57 @@ export const DraftPlayer = forwardRef<
           onError={() => setVoiceMissing(true)}
           onLoadedMetadata={() => setVoiceMissing(false)}
         />
-        {effects.map((o) => (
-          <div
-            key={o.id}
-            className={`draft-fx ${o.type}`}
-            style={{
-              left: `${o.x * 100}%`,
-              top: `${o.y * 100}%`,
-              ...(o.type === "blur" || o.type === "box"
-                ? { width: `${o.w * 100}%`, height: `${o.h * 100}%` }
-                : {}),
-              color: o.color,
-            }}
-            onPointerDown={playing ? undefined : drag(o, "move")}
-            onClick={still}
-          >
-            {o.type === "text"
-              ? o.text
-              : o.type === "arrow"
-                ? o.text || "→"
-                : o.type === "cursor"
-                  ? "●"
-                  : null}
-            {(o.type === "blur" || o.type === "box") &&
-              onOverlay &&
-              !playing && (
-                <i
-                  className="draft-fx-size"
-                  onPointerDown={drag(o, "size")}
-                  onClick={still}
-                />
-              )}
-          </div>
-        ))}
+        {effects.map((o) => {
+          const fade = textFade(o);
+          return (
+            <div
+              key={o.id}
+              data-selected={focusOverlayId === o.id || undefined}
+              className={`draft-fx ${o.type}`}
+              data-text-style={
+                o.type === "text" ? o.textStyle || "label" : undefined
+              }
+              style={{
+                left: `${o.x * 100}%`,
+                top: `${o.y * 100}%`,
+                ...(o.type === "blur" || o.type === "box"
+                  ? { width: `${o.w * 100}%`, height: `${o.h * 100}%` }
+                  : {}),
+                color: o.color,
+                ...(o.type === "text"
+                  ? {
+                      fontSize: `calc(var(--h) * ${o.textSize ?? Math.max(18 / l.height, DEFAULT_TEXT_SIZE)})`,
+                      opacity: fade
+                        ? Math.min(1, (t - o.start) / fade, (o.end - t) / fade)
+                        : undefined,
+                    }
+                  : {}),
+              }}
+              onPointerDown={playing ? undefined : drag(o, "move")}
+              onClick={(e) => {
+                still(e);
+                onPickOverlay?.(o.id);
+              }}
+            >
+              {o.type === "text"
+                ? canvasText(o)
+                : o.type === "arrow"
+                  ? o.text || "→"
+                  : o.type === "cursor"
+                    ? "●"
+                    : null}
+              {(o.type === "blur" || o.type === "box") &&
+                onOverlay &&
+                !playing && (
+                  <i
+                    className="draft-fx-size"
+                    onPointerDown={drag(o, "size")}
+                    onClick={still}
+                  />
+                )}
+            </div>
+          );
+        })}
         {zoom && onOverlay && !playing && plan.screen && (
           <div
             className="draft-fx-focus"
@@ -492,14 +624,14 @@ export const DraftPlayer = forwardRef<
           o.type === "title" ? (
             <div className="draft-title" key={o.id}>
               <i style={{ background: o.color }} />
-              <strong>{o.text}</strong>
-              {o.sub && <span>{o.sub}</span>}
+              <strong>{canvasText(o)}</strong>
+              {o.sub && <span>{canvasText(o, "sub")}</span>}
             </div>
           ) : o.type === "lowerthird" ? (
             <div className="draft-lower" key={o.id}>
               <i style={{ background: o.color }} />
-              <strong>{o.text}</strong>
-              {o.sub && <span>{o.sub}</span>}
+              <strong>{canvasText(o)}</strong>
+              {o.sub && <span>{canvasText(o, "sub")}</span>}
             </div>
           ) : (
             <div
@@ -507,7 +639,7 @@ export const DraftPlayer = forwardRef<
               key={o.id}
               style={{ background: o.color }}
             >
-              {o.text}
+              {canvasText(o)}
             </div>
           ),
         )}

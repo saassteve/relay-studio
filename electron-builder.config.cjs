@@ -22,6 +22,7 @@ module.exports = {
   files: [
     "dist/**/*",
     "server/**/*",
+    "shared/*.mjs",
     "desktop/**/*",
     "package.json",
     "LICENSE",

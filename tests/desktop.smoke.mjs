@@ -480,8 +480,39 @@ try {
   );
   await until(isVisible, "Studio returns after recording");
   await window.screenshot({ path: "test-results/desktop-studio.png" });
+  const fixture = await window.request.post(
+    new URL("/api/videos", window.url()).href,
+    {
+      multipart: {
+        title: "Playback and scrolling",
+        duration: "15",
+        video: {
+          name: "presenter.mp4",
+          mimeType: "video/mp4",
+          buffer: readFileSync("scripts/assets/presenter.mp4"),
+        },
+      },
+    },
+  );
+  assert.ok(fixture.ok(), await fixture.text());
+  const { id } = await fixture.json();
+  await window.goto(new URL(`/video/${id}`, window.url()).href);
+  await window.setViewportSize({ width: 1240, height: 720 });
+  await window.getByRole("button", { name: "Play", exact: true }).click();
+  const stage = window.locator(".stage");
+  const box = await stage.boundingBox();
+  const scroll = await window.evaluate(() => scrollY);
+  await window.mouse.move(box.x + box.width / 2, Math.max(30, box.y + 160));
+  await window.mouse.wheel(0, 450);
+  await window.waitForFunction((from) => scrollY > from + 100, scroll);
+  const video = stage.locator("video").first();
+  await until(
+    () => video.evaluate((clip) => !clip.paused && clip.currentTime > 0.1),
+    "Editor playback continues while the window scrolls",
+  );
+  assert.equal((await stage.boundingBox()).height, box.height);
   console.log(
-    "Desktop smoke passed: stable library port, resumable onboarding, permission checklist, native countdown, hide/restore, recording shortcuts, floating controls, teleprompter and update/permission APIs.",
+    "Desktop smoke passed: stable library port, resumable onboarding, permission checklist, native countdown, hide/restore, recording shortcuts, floating controls, teleprompter, update/permission APIs and scrolling during editor playback.",
   );
 } finally {
   // A failure part-way can leave a recording marked active. Relay would then ask

@@ -31,14 +31,12 @@
   height: 100%;
   object-fit: cover;
   display: block;
-  transition: transform 0.6s cubic-bezier(0.3, 0.7, 0.2, 1);
 }
 /* Blurs that sit on the screen picture, zoomed with it. */
 .draft-on-screen {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  transition: transform 0.6s cubic-bezier(0.3, 0.7, 0.2, 1);
 }
 .draft-play {
   position: absolute;
@@ -81,7 +79,7 @@
   letter-spacing: -0.02em;
   padding: 0 6%;
 }
-.draft-title span {
+.draft-title > span {
   font:
     400 calc(var(--h) * 0.036) / 1.3 "DM Sans",
     sans-serif;
@@ -112,7 +110,7 @@
     800 calc(var(--h) * 0.04) / 1.2 "Manrope",
     sans-serif;
 }
-.draft-lower span {
+.draft-lower > span {
   font:
     400 calc(var(--h) * 0.026) / 1.3 "DM Sans",
     sans-serif;
@@ -345,6 +343,14 @@
     sans-serif;
   white-space: pre;
 }
+.draft-fx.text[data-text-style="outline"] {
+  background: none;
+  paint-order: stroke fill;
+  -webkit-text-stroke: 0.12em #101a10;
+}
+.draft-fx.text[data-text-style="plain"] {
+  background: none;
+}
 .draft-fx.arrow {
   font:
     500 calc(var(--h) * 0.12) / 1 "DM Sans",
@@ -393,36 +399,6 @@
   background: var(--lime);
 }
 
-/* The preview and tabs stay in view while the tools scroll. */
-.preview-sentinel {
-  height: 1px;
-  margin-bottom: -1px;
-}
-.preview-dock {
-  position: sticky;
-  top: 0;
-  z-index: 20;
-  background: var(--paper);
-}
-.preview-dock.is-stuck {
-  padding-top: 8px;
-  box-shadow: 0 10px 14px -12px var(--dark-shadow-2, #173e3233);
-}
-.preview-dock.is-stuck .draft-player {
-  width: min(100%, calc(34vh * var(--ratio, 1.778)));
-}
-.preview-dock.is-stuck .draft-player {
-  border-radius: 12px;
-}
-.preview-dock.is-stuck .studio-status {
-  padding: 6px 2px;
-}
-@media (max-width: 900px), (max-height: 640px) {
-  .preview-dock {
-    position: static;
-  }
-}
-
 /* As wide as fits, never taller than most of the window, always in proportion. */
 .draft-player {
   width: min(100%, calc(66vh * var(--ratio, 1.778)));
@@ -452,13 +428,6 @@
   margin: 14px auto 0;
   border-radius: 8px;
 }
-.preview-dock.is-stuck .stage .draft-player {
-  width: 100%;
-}
-.preview-dock.is-stuck .stage .draft-canvas {
-  width: min(100% - 28px, calc(28vh * var(--ratio, 1.778)));
-  margin-top: 10px;
-}
 .draft-box.is-movable {
   cursor: grab;
   touch-action: none;
@@ -475,7 +444,7 @@
   position: relative;
   padding-top: 18px;
   cursor: pointer;
-  touch-action: none;
+  touch-action: pan-y;
 }
 .tl-ruler {
   position: absolute;
@@ -559,6 +528,10 @@
   color: #4a3a08;
 }
 .tl-bar.track-2 {
+  background: #ddd2f3;
+  color: #40305a;
+}
+.tl-bar.track-3 {
   background: #a9dcc8;
   color: #0f3a2b;
 }
@@ -607,25 +580,6 @@
   border-radius: 50%;
   background: #fff;
 }
-.preview-dock.is-stuck .tl-ruler {
-  display: none;
-}
-.preview-dock.is-stuck .timeline-area {
-  padding-top: 4px;
-}
-/* Pinned while scrolling: smaller picture, and the tracks scroll if there are many. */
-.preview-dock.is-stuck .stage .draft-canvas {
-  width: min(100% - 28px, calc(24vh * var(--ratio, 1.778)));
-}
-.preview-dock.is-stuck .timeline-area {
-  max-height: 96px;
-  overflow-y: auto;
-}
-.preview-dock.is-stuck .tl-now {
-  position: sticky;
-  display: none;
-}
-
 /* Timeline, second pass: named rows, bars you can always grab. */
 .timeline {
   display: grid;
@@ -657,21 +611,6 @@
 .tl-ruler span:first-child {
   padding-left: 8px;
 }
-.preview-dock.is-stuck .timeline-area {
-  max-height: none;
-  overflow: visible;
-}
-.preview-dock.is-stuck .tl-bars,
-.preview-dock.is-stuck .tl-names span:nth-child(n + 3) {
-  display: none;
-}
-.preview-dock.is-stuck .tl-names .tl-ruler-gap {
-  height: 4px;
-}
-.preview-dock.is-stuck .tl-now {
-  display: block;
-  position: absolute;
-}
 @media (max-width: 700px) {
   .timeline {
     grid-template-columns: minmax(0, 1fr);
@@ -679,4 +618,26 @@
   .tl-names {
     display: none;
   }
+}
+
+.canvas-text-target {
+  pointer-events: auto;
+  cursor: text;
+}
+.canvas-text-input {
+  display: block;
+  width: min(22ch, 40vw);
+  min-width: 5ch;
+  box-sizing: border-box;
+  resize: none;
+  font: inherit;
+  color: inherit;
+  background: #151b21;
+  outline: 2px solid #adddff;
+  text-shadow: inherit;
+  pointer-events: auto;
+  user-select: text;
+}
+.draft-canvas.is-editing .draft-fx[data-selected] {
+  outline: 2px solid #adddff;
 }

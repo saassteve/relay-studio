@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowUpRight,
@@ -78,7 +78,8 @@ export function Editor({
     [messageBusy, setMessageBusy] = useState(false),
     [replyTo, setReplyTo] = useState<string | null>(null);
   const player = useRef<HTMLVideoElement>(null),
-    draft = useRef<WorkbenchHandle>(null);
+    draft = useRef<WorkbenchHandle>(null),
+    position = useRef(0);
   const canEdit = !token && !readOnly;
   const saveShare = useRef<() => Promise<boolean>>(async () => true);
   const [shareDirty, setShareDirty] = useState(false);
@@ -201,9 +202,12 @@ export function Editor({
       setUpdating(false);
     }
   };
-  // The comment box only needs the playhead to the tenth of a second, and anything
-  // finer would redraw the whole page on every frame of playback.
-  const tick = (t: number) => setTime(Math.round(t * 10) / 10);
+  // Keep the exact timestamp for actions. The comment clock only shows seconds.
+  const tick = useCallback((t: number) => {
+    const second = Math.floor(t);
+    if (Math.floor(position.current) !== second) setTime(second);
+    position.current = t;
+  }, []);
   // A connected server turns "send the file" into "send a link".
   const [cloud, setCloud] = useState<{
       connected: boolean;
@@ -314,7 +318,7 @@ export function Editor({
           body: JSON.stringify({
             author: name,
             body: comment,
-            time: Math.min(time, clip.duration),
+            time: Math.min(position.current, clip.duration),
             parentId: replyTo,
           }),
         },
@@ -352,7 +356,7 @@ export function Editor({
     if (canEdit) return draft.current?.seek(n);
     if (player.current) {
       player.current.currentTime = n;
-      setTime(n);
+      tick(n);
     }
   };
   const react = async (emoji: string) => {
@@ -1036,7 +1040,7 @@ export function Editor({
                         clip={clip}
                         onChange={update}
                         notify={notify}
-                        time={time}
+                        time={position.current}
                         saveRef={saveShare}
                         onDirty={setShareDirty}
                       />
@@ -1071,7 +1075,7 @@ export function Editor({
                 clip={clip}
                 onChange={update}
                 notify={notify}
-                time={time}
+                time={position.current}
                 saveRef={saveShare}
                 onDirty={setShareDirty}
               />

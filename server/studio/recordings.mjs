@@ -371,7 +371,6 @@ export function registerRecordings({
           ...autoZoom(meta.pointers, {
             segments: project.segments,
             sourceId: videoId,
-            duration: length,
           }),
         ].slice(0, 60);
       // Client-supplied layout reaches the render, so it is always validated.

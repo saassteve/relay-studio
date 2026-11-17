@@ -2166,9 +2166,6 @@ summary::-webkit-details-marker {
 .studio-workbench .draft-player {
   width: 100%;
 }
-.preview-dock.is-stuck .draft-player {
-  width: min(100%, calc(34vh * var(--ratio, 1.778)));
-}
 @media (max-width: 900px) {
   .onboarding-stage {
     padding-top: 28px;
@@ -2556,9 +2553,6 @@ main[tabindex="-1"]:focus-visible {
   height: 2px;
   border-radius: 2px;
   background: var(--accent);
-}
-.preview-dock.is-stuck {
-  padding-bottom: 8px;
 }
 /* Sliders: a light track with a clear edge, and a solid fill for the value. */
 .slider input[type="range"]::-webkit-slider-runnable-track {

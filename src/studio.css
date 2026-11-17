@@ -59,6 +59,7 @@
 .studio-content
   input:not([type="checkbox"]):not([type="range"]):not([type="color"]),
 .studio-content select,
+.studio-content .effect-text textarea,
 .device-grid input,
 .device-grid select,
 .integration-details input {
@@ -307,6 +308,13 @@
 }
 .effect-row input {
   padding: 7px 11px !important;
+}
+.effect-row > .effect-text {
+  flex-basis: 100%;
+}
+.effect-row textarea {
+  resize: vertical;
+  min-height: 60px;
 }
 .effect-add button {
   font-size: 13px;
@@ -802,4 +810,80 @@
 }
 .studio-save-bar > .actions .btn {
   white-space: nowrap;
+}
+
+.stage + .effect-row {
+  margin-top: 12px;
+  padding: 16px;
+  gap: 12px;
+}
+.stage + .effect-row > strong {
+  flex-basis: 100%;
+}
+.stage + .effect-row > label {
+  min-width: min(110px, 100%);
+}
+.stage + .effect-row input[type="color"] {
+  display: block;
+  width: 100%;
+  height: 34px;
+  cursor: pointer;
+}
+
+.inspector-timing {
+  flex: 1 1 75%;
+}
+.inspector-timing > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.inspector-timing > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+  margin-top: 10px;
+}
+.inspector-timing label {
+  display: grid;
+  gap: 4px;
+}
+.inspector-timing input {
+  max-width: 10ch;
+}
+.tl-bar[aria-pressed="true"] {
+  box-shadow: inset 0 0 0 2px #fff;
+}
+
+.stage + .effect-row > strong {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 16px;
+}
+.stage + .effect-row > label {
+  display: grid;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  align-self: end;
+}
+.stage + .effect-row > label > :is(select, input) {
+  box-sizing: border-box;
+  width: 100%;
+  height: 36px;
+  min-width: 0;
+}
+.inspector-copy {
+  flex-basis: 100%;
+}
+.inspector-copy summary {
+  cursor: pointer;
+  font-size: 13px;
+}
+.inspector-copy textarea {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 6px;
 }

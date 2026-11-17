@@ -30,6 +30,7 @@ import {
 } from "./project.mjs";
 import { registerPortable } from "./portable.mjs";
 import { autoZoom } from "./autozoom.mjs";
+import { MAX_EFFECTS } from "../../shared/editor-effects.mjs";
 import { createAssistantEdits } from "./assistant-edits.mjs";
 import { registerAI } from "./ai/index.mjs";
 import { registerIntegrations } from "./integrations.mjs";
@@ -414,26 +415,37 @@ export function registerStudio(context) {
     );
   });
   jobs.register("summarize", transcription.summarize);
-  app.get("/api/videos/:id/focus-suggestions", owner, (req, res) => {
-    const v = find(req.params.id),
-      recording = db
-        .prepare("SELECT meta FROM recordings WHERE video_id=?")
-        .get(v.id),
-      points = parseJSON(recording?.meta, {}).pointers || [],
-      project = getProject(v);
+  const focusSuggestions = (req, res) => {
+    const v = find(req.params.id);
+    const project =
+      req.method === "POST"
+        ? validateProject(req.body, sourceFind)
+        : getProject(v);
+    const sources = new Set(project.segments.map((s) => s.sourceId));
+    const recording = db.prepare(
+      "SELECT meta FROM recordings WHERE video_id=?",
+    );
     const existing = project.overlays.filter((o) => o.type === "zoom");
     // Skip moments that already have a zoom.
     res.json(
-      autoZoom(points, {
-        segments: project.segments,
-        sourceId: v.id,
-        // The length of the footage, not of the published video.
-        duration: sourceFind(v.id).duration,
-      }).filter(
-        (z) => !existing.some((e) => z.start < e.end && z.end > e.start),
-      ),
+      [...sources]
+        .flatMap((sourceId) =>
+          autoZoom(parseJSON(recording.get(sourceId)?.meta, {}).pointers, {
+            segments: project.segments,
+            sourceId,
+          }),
+        )
+        .filter(
+          (z) => !existing.some((e) => z.start < e.end && z.end > e.start),
+        )
+        .sort((a, b) => a.start - b.start)
+        .slice(0, Math.max(0, MAX_EFFECTS - project.overlays.length)),
     );
-  });
+  };
+  app
+    .route("/api/videos/:id/focus-suggestions")
+    .get(owner, focusSuggestions)
+    .post(owner, focusSuggestions);
   app.post("/api/videos/:id/suggestions", owner, async (req, res) =>
     res.json(await transcription.suggestions(req.params.id)),
   );

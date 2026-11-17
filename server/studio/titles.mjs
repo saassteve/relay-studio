@@ -4,6 +4,7 @@
 // cursor dots.
 // libass falls back to a system font for characters the bundled fonts lack.
 import { captionCues } from "./project.mjs";
+import { DEFAULT_TEXT_SIZE, textFade } from "../../shared/editor-effects.mjs";
 
 export const CAPTION_STYLES = ["clean", "bold", "box", "highlight"];
 export const TITLE_TYPES = ["title", "lowerthird", "chapter"];
@@ -245,9 +246,19 @@ function textEvents(o, W, H, fps) {
   const text = readable(literal(o.text)),
     times = shown(o, fps);
   if (!text || !times) return [];
-  const size = Math.max(18, Math.round(H * 0.045)),
+  const size =
+      o.textSize === undefined
+        ? Math.max(18, Math.round(H * DEFAULT_TEXT_SIZE))
+        : Math.round(H * o.textSize),
     x = Math.round(o.x * W),
     y = Math.round(o.y * H) - size * TEXT_TOP,
+    fade = Math.round(textFade(o) * 1000),
+    style =
+      o.textStyle === "outline"
+        ? "TextOutline"
+        : o.textStyle === "plain"
+          ? "TextPlain"
+          : "Text",
     tags = [
       `\\an7\\pos(${x},${y.toFixed(2)})`,
       // Only the line breaks that were typed.
@@ -256,9 +267,13 @@ function textEvents(o, W, H, fps) {
       `\\1c${hexToASS(o.color)}`,
       // How far the box reaches past the text: 10 px at each side of a 720p
       // frame, and as far above and below as the preview's box does.
-      `\\xshad${(size * 0.3125).toFixed(2)}\\yshad${(size * 0.14).toFixed(2)}`,
+      style === "Text"
+        ? `\\xshad${(size * 0.3125).toFixed(2)}\\yshad${(size * 0.14).toFixed(2)}`
+        : "",
+      style === "TextOutline" ? `\\bord${(size * 0.06).toFixed(2)}` : "",
+      fade ? `\\fad(${fade},${fade})` : "",
     ];
-  return [`Dialogue: 0,${times},Text,,0,0,0,,{${tags.join("")}}${text}`];
+  return [`Dialogue: 0,${times},${style},,0,0,0,,{${tags.join("")}}${text}`];
 }
 // A cursor: a dot in the overlay's colour, drawn as a shape because the bundled
 // fonts have no "●". It is where and as big as the preview shows that character,
@@ -394,6 +409,14 @@ function script(W, H, events, kerning = false) {
       align: 7,
       border: 4,
       back: "&H73000000",
+    }),
+    style("TextPlain", "DM Sans", DEFAULT_TEXT_SIZE * TEXT_LINE, {
+      bold: 1,
+      align: 7,
+    }),
+    style("TextOutline", "DM Sans", DEFAULT_TEXT_SIZE * TEXT_LINE, {
+      bold: 1,
+      align: 7,
     }),
     "",
     "[Events]",

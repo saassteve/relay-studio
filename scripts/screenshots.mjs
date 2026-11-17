@@ -779,7 +779,7 @@ try {
     await page.evaluate(() => scrollTo(0, 0));
     await tabs.getByRole("tab", { name: tab }).click();
     await page.waitForTimeout(500);
-    await page.locator(".preview-dock").evaluate((el) => el.scrollIntoView());
+    await page.locator(".stage").evaluate((el) => el.scrollIntoView());
     await page.evaluate(() => scrollBy(0, 330));
     await shot(name);
   };

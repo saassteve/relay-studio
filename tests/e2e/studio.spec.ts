@@ -1,4 +1,124 @@
 import { test, expect } from "@playwright/test";
+import { readFile } from "node:fs/promises";
+
+test("scrolls during playback and publishes multiple zooms with styled text", async ({
+  page,
+}) => {
+  await page.request.put("/api/preferences", { data: { onboarded: true } });
+  const uploaded = await page.request.post("/api/videos", {
+    multipart: {
+      title: "Effects review",
+      duration: "15",
+      video: {
+        name: "presenter.mp4",
+        mimeType: "video/mp4",
+        buffer: await readFile("scripts/assets/presenter.mp4"),
+      },
+    },
+  });
+  expect(uploaded.ok(), await uploaded.text()).toBeTruthy();
+  const { id } = await uploaded.json();
+  await page.goto(`/video/${id}`);
+  await page.setViewportSize({ width: 1240, height: 720 });
+  const position = page.getByLabel("Position in video");
+  const stage = page.locator(".stage");
+  const video = stage.locator("video").first();
+  const scroll = () => page.evaluate(() => window.scrollY);
+  const play = page.getByRole("button", { name: "Play", exact: true });
+  await play.click();
+  const initialScroll = await scroll();
+  const previewHeight = (await stage.boundingBox())!.height;
+  await page.mouse.move(400, 350);
+  await page.mouse.wheel(0, 400);
+  await expect.poll(scroll).toBeGreaterThan(initialScroll + 100);
+  await expect
+    .poll(() => video.evaluate((v) => v.currentTime))
+    .toBeGreaterThan(0.1);
+  expect(await video.evaluate((v) => v.paused)).toBe(false);
+  expect((await stage.boundingBox())!.height).toBe(previewHeight);
+  await page.mouse.move(400, 580);
+  await page.mouse.wheel(0, -600);
+  await expect.poll(scroll).toBeLessThan(100);
+  await page.getByRole("button", { name: "Pause", exact: true }).click();
+
+  const tools = page.getByRole("tablist", { name: "Editing tools" });
+  await tools.getByRole("tab", { name: "Effects" }).click();
+  await position.fill("1");
+  const effects = page.getByRole("tabpanel", { name: "Effects" });
+  await effects.getByRole("button", { name: "Zoom", exact: true }).click();
+  const zooms = page
+    .locator(".effect-row")
+    .filter({ has: page.getByLabel("Zoom motion") });
+  await zooms.first().getByLabel("Zoom ×").fill("2.4");
+  await zooms.first().getByLabel("Zoom motion").selectOption("quick");
+  await zooms.first().getByRole("button", { name: "Duplicate Zoom" }).click();
+  const zoomTrack = stage.getByRole("group", { name: "Zooms", exact: true });
+  await expect(zoomTrack.getByRole("button")).toHaveCount(2);
+  await zooms.last().getByText("Timing and position").click();
+  await expect(zooms.last().getByLabel("Starts at (sec)")).toHaveValue("4");
+  await zooms.last().getByLabel("Zoom motion").selectOption("cut");
+  await zooms.last().getByRole("button", { name: "Go to it: Zoom" }).click();
+  await expect(video).toHaveCSS("transform", "matrix(2.4, 0, 0, 2.4, 0, 0)");
+
+  await effects.getByRole("button", { name: "Text", exact: true }).click();
+  const text = page
+    .locator(".effect-row")
+    .filter({ has: page.getByLabel("Text style") });
+  await expect(page.locator(".effect-row")).toHaveCount(1);
+  const target = stage.getByText("Your text", { exact: true }).first();
+  await target.dblclick();
+  const inline = stage.getByLabel("Edit text in preview");
+  await inline.fill("Discard this");
+  await inline.press("Escape");
+  await expect(target).toBeVisible();
+  await target.dblclick();
+  await inline.fill("First line\nSecond line");
+  await inline.press("Meta+Enter");
+  await expect(text.getByLabel("Words")).toHaveValue("First line\nSecond line");
+  await text.getByLabel("Text style").selectOption("outline");
+  await text.getByLabel("Text size (% of frame height)").fill("8");
+  await text.getByLabel("Text animation").selectOption("fade");
+  await text.getByText("Timing and position").click();
+  await text.getByRole("button", { name: "Go to it: Text" }).click();
+  const overlay = stage.locator('.draft-fx.text[data-text-style="outline"]');
+  await expect(overlay).toHaveText("First line\nSecond line", {
+    useInnerText: true,
+  });
+  await expect(overlay).toHaveCSS("opacity", "1");
+  await page.getByRole("button", { name: "Update video" }).click();
+  await expect(page.locator(".save-state")).toHaveText("Video is up to date", {
+    timeout: 90000,
+  });
+  const { published } = await (
+    await page.request.get(`/api/videos/${id}/project`)
+  ).json();
+  expect(published.overlays).toMatchObject([
+    { type: "zoom", scale: 2.4, motion: "quick" },
+    { type: "zoom", scale: 2.4, motion: "cut" },
+    { type: "text", textStyle: "outline", textSize: 0.08, animation: "fade" },
+  ]);
+  await expect
+    .poll(async () => {
+      const clip = await page.request.get(`/api/videos/${id}`);
+      return (await clip.json()).streamReady;
+    })
+    .toBeTruthy();
+
+  await text.getByRole("button", { name: "Duplicate Text" }).click();
+  await stage.locator(".canvas-text-target").last().dblclick();
+  await inline.fill("Second caption");
+  await text.getByLabel("Text animation").click();
+  await expect(text.getByLabel("Words")).toHaveValue("Second caption");
+  await text.getByLabel("Text colour").fill("#ff4488");
+  await stage.getByRole("button", { name: /^First line/ }).click();
+  await expect(text.getByLabel("Words")).toHaveValue("First line\nSecond line");
+  await expect(text.getByLabel("Text colour")).not.toHaveValue("#ff4488");
+  await expect(page.locator(".effect-row")).toHaveCount(1);
+  await page
+    .locator(".studio-workbench")
+    .screenshot({ path: "test-results/text-inspector.png" });
+});
+
 test("reversible sections, captions, presentation, access and offline shell", async ({
   page,
   browser,
@@ -54,11 +174,12 @@ test("reversible sections, captions, presentation, access and offline shell", as
     await page.mouse.up();
   };
   const middle = async (index: number, part = ".tl-clips>button") => {
-    const box = (await (
-      part.startsWith(".tl-trim")
-        ? sections.nth(index).locator(part)
-        : sections.nth(index)
-    ).boundingBox())!;
+    const section = sections.nth(index);
+    const target = part.startsWith(".tl-trim")
+      ? section.locator(part)
+      : section;
+    await target.scrollIntoViewIfNeeded();
+    const box = (await target.boundingBox())!;
     return { x: box.x + box.width / 2, y: box.y + box.height / 2, box };
   };
   // A click only selects.
@@ -69,13 +190,13 @@ test("reversible sections, captions, presentation, access and offline shell", as
   expect(splitAt).toBeGreaterThan(2);
   await saved();
   // Drag the end of the first section a third of the way back: it gets shorter.
-  const first = await middle(0);
-  const endHandle = await middle(0, ".tl-trim.end");
-  expect(endHandle.box.width).toBeGreaterThanOrEqual(12);
   await sections.nth(0).locator(".tl-trim.end").hover();
   await page.locator(".stage").screenshot({
     path: "test-results/timeline-sections.png",
   });
+  const first = await middle(0);
+  const endHandle = await middle(0, ".tl-trim.end");
+  expect(endHandle.box.width).toBeGreaterThanOrEqual(12);
   await drag(endHandle, endHandle.x - first.box.width / 3);
   await expect
     .poll(async () => Number(await trimEnd.inputValue()))

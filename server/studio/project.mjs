@@ -1,6 +1,12 @@
 import { problem, parseJSON } from "./schema.mjs";
 import { WALLPAPERS, PRESETS, onScreen, planLayout } from "./compose.mjs";
 import { CAPTION_STYLES, TITLE_TYPES } from "./titles.mjs";
+import {
+  MAX_EFFECTS,
+  TEXT_ANIMATIONS,
+  TEXT_STYLES,
+  ZOOM_MOTIONS,
+} from "../../shared/editor-effects.mjs";
 // The shortest a layout change may be, with room for floating-point subtraction.
 const MIN_SCENE = 0.5 - 1e-6;
 export const defaultLayout = () => ({
@@ -100,9 +106,9 @@ export function validateProject(input, find) {
   const total = segments.reduce((n, s) => n + s.end - s.start, 0);
   if (
     !Array.isArray(input.overlays || []) ||
-    (input.overlays || []).length > 60
+    (input.overlays || []).length > MAX_EFFECTS
   )
-    throw problem(400, "Use at most 60 visual effects.");
+    throw problem(400, `Use at most ${MAX_EFFECTS} visual effects.`);
   const overlays = (input.overlays || [])
     .map((o, i) => {
       if (
@@ -122,7 +128,7 @@ export function validateProject(input, find) {
       if (until <= start)
         throw problem(400, "An effect must have a positive duration.");
       // Trimming the video can leave an effect hanging past the end: keep what fits.
-      if (start > total - 0.1) return null;
+      if (start >= total) return null;
       const end = Math.min(until, total);
       return {
         id: String(o.id || i).slice(0, 80),
@@ -147,6 +153,18 @@ export function validateProject(input, find) {
           : {}),
         color: /^#[a-f0-9]{6}$/i.test(o.color || "") ? o.color : "#d6f475",
         ...(o.type === "zoom" && o.auto === true ? { auto: true } : {}),
+        ...(o.type === "zoom" && ZOOM_MOTIONS.includes(o.motion)
+          ? { motion: o.motion }
+          : {}),
+        ...(o.type === "text" && TEXT_STYLES.includes(o.textStyle)
+          ? { textStyle: o.textStyle }
+          : {}),
+        ...(o.type === "text" && TEXT_ANIMATIONS.includes(o.animation)
+          ? { animation: o.animation }
+          : {}),
+        ...(o.type === "text" && o.textSize !== undefined
+          ? { textSize: number(o.textSize, 0.02, 0.12, "text size") }
+          : {}),
       };
     })
     .filter(Boolean);

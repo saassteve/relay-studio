@@ -221,6 +221,10 @@ export interface Project {
     text: string;
     color: string;
     auto?: boolean;
+    motion?: "smooth" | "quick" | "cut";
+    textStyle?: "label" | "outline" | "plain";
+    textSize?: number;
+    animation?: "none" | "fade";
   }[];
   scenes?: {
     id: string;

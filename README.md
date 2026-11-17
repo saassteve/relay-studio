@@ -90,7 +90,9 @@ The app is Mac-only for now. Everywhere else, [run Relay from source](#run-from-
   <img src="docs/images/editor.png" alt="The Relay editor: a live preview with a timeline of sections, titles, effects and layout changes underneath" width="100%">
 </p>
 
-The preview shows exactly what your viewers will get, as you edit. Underneath, a timeline lays out your sections, titles, zooms and layout changes. Drag the end of a section to trim it, or drag a section sideways to change the order. Titles, zooms and layout changes move and stretch the same way. Pause and drag text, arrows, boxes, blurs and the camera bubble right in the picture.
+Play your edits immediately in the preview. Underneath, a timeline lays out your sections, titles, effects and layout changes. Drag the end of a section to trim it, or drag a section sideways to change the order. Titles, zooms and layout changes move and stretch the same way. Pause and drag text, arrows, boxes, blurs and the camera bubble right in the picture.
+
+Open **Effects** to add zooms, text, arrows, outlines, blurs or dots at the playhead. Each zoom has its own timing, magnification, focus point and motion. Text can span multiple lines and has controls for size, style and fade. Click a bar on the timeline to edit it, or use **Go to it** to place the effect in the preview.
 
 Edits save themselves. One button, **Update video**, puts them into the file you share, and <kbd>⌘</kbd> <kbd>Z</kbd> takes back anything.
 
@@ -230,7 +232,8 @@ Relay also lives in your menu bar, with the timer and controls one click away.
 | 4K recording | ✓ at 30 fps | Paid plans |
 | Where videos live | Your Mac or your server | Loom's cloud |
 | Camera filters and virtual backgrounds | ✓ on-device | ✓ |
-| Wallpapers, rounded frames and shadows | ✓ | — |
+| Video backgrounds | Wallpapers, rounded frames and shadows | [Backgrounds](https://support.atlassian.com/loom/docs/add-a-background-to-your-loom-video/) |
+| Timed text and callouts | Styled text, arrows, outlines, blurs and dots | [Text, arrows and boxes on eligible plans](https://support.atlassian.com/loom/docs/add-overlays-text-arrows-and-boxes-to-your-video/) |
 | Switch layouts mid-video | ✓ | — |
 | Auto-zoom when you pause the pointer | ✓ Mac app | — |
 | Edit by deleting words | ✓ | ✓ |
