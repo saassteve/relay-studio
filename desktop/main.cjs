@@ -23,6 +23,7 @@ let mainWindow,
   server,
   baseURL,
   selectedSource,
+  pickerSources = [],
   selectedDisplay,
   nativeStudio,
   captureUI,
@@ -371,11 +372,9 @@ app
             !request.frame.url.startsWith(baseURL + "/video/")
           )
             return callback({});
-          const sources = await desktopCapturer.getSources({
-            types: ["screen", "window"],
-          });
-          const source = sources.find((s) => s.id === selectedSource);
+          const source = selectedSource;
           selectedSource = undefined;
+          pickerSources = [];
           if (!source) return callback({});
           // Current Chromium uses CoreAudio Tap on supported macOS releases.
           callback(
@@ -394,6 +393,8 @@ app
     );
     ipcMain.handle("relay:sources", async (event) => {
       if (!trusted(event)) throw new Error("Untrusted capture request");
+      selectedSource = undefined;
+      pickerSources = [];
       let sources;
       try {
         sources = await desktopCapturer.getSources({
@@ -405,6 +406,7 @@ app
         // On a Mac this is what a missing or out-of-date permission looks like.
         throw new Error("screen-permission");
       }
+      pickerSources = sources;
       return sources.map((s) => ({
         id: s.id,
         name: s.name,
@@ -415,12 +417,13 @@ app
     ipcMain.handle("relay:select-source", async (event, id) => {
       if (!trusted(event) || typeof id !== "string")
         throw new Error("Untrusted capture request");
-      selectedSource = id;
-      const sources = await desktopCapturer.getSources({
-        types: ["screen", "window"],
-        thumbnailSize: { width: 0, height: 0 },
-      });
-      const source = sources.find((s) => s.id === id);
+      // The picker already obtained these sources from macOS. Keep the chosen
+      // object for getDisplayMedia instead of enumerating every window again.
+      selectedSource = undefined;
+      const source = pickerSources.find((s) => s.id === id);
+      if (!source)
+        throw new Error("Choose a screen or window from the picker again.");
+      selectedSource = source;
       selectedDisplay = source?.id.startsWith("screen:")
         ? screen
             .getAllDisplays()

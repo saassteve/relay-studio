@@ -121,6 +121,44 @@ try {
   assert.equal(info.stablePort, true, "Library should use its stable port");
   assert.equal(new URL(window.url()).port, port);
 
+  // Selecting a listed source must reuse the picker snapshot and reject IDs
+  // outside it, without another expensive call to macOS.
+  await app.evaluate(({ desktopCapturer, nativeImage }) => {
+    globalThis.__relayGetSources = desktopCapturer.getSources;
+    globalThis.__relaySourceCalls = 0;
+    desktopCapturer.getSources = async () => {
+      globalThis.__relaySourceCalls += 1;
+      return [
+        {
+          id: "screen:999:0",
+          name: "Test screen",
+          display_id: "999",
+          thumbnail: nativeImage.createEmpty(),
+        },
+      ];
+    };
+  });
+  try {
+    const sources = await window.evaluate(() => window.relayDesktop.sources());
+    assert.equal(sources[0].name, "Test screen");
+    await window.evaluate(() =>
+      window.relayDesktop.selectSource("screen:999:0"),
+    );
+    await assert.rejects(
+      window.evaluate(() =>
+        window.relayDesktop.selectSource("screen:unlisted:0"),
+      ),
+      /Choose a screen or window from the picker again/,
+    );
+    assert.equal(await app.evaluate(() => globalThis.__relaySourceCalls), 1);
+  } finally {
+    await app.evaluate(({ desktopCapturer }) => {
+      desktopCapturer.getSources = globalThis.__relayGetSources;
+      delete globalThis.__relayGetSources;
+      delete globalThis.__relaySourceCalls;
+    });
+  }
+
   // First run: guided setup, resumable after a reload or relaunch.
   const setup = window.getByRole("dialog", { name: "Set up Relay" });
   await setup.waitFor();

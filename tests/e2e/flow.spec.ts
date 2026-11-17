@@ -98,6 +98,37 @@ test("capture, edit, export, share, comment, revoke; responsive library", async 
   });
   await page.getByRole("button", { name: "New recording" }).first().click();
   await page.getByRole("radio", { name: "Screen only", exact: true }).click();
+  // A slow native source list must show progress immediately, and Back must
+  // keep a late response from reopening the picker.
+  await page.evaluate(() => {
+    Object.defineProperty(window, "relayDesktop", {
+      configurable: true,
+      value: {
+        sources: () =>
+          new Promise((resolve) => {
+            Object.assign(window, { __resolveSources: resolve });
+          }),
+      },
+    });
+  });
+  await page.getByRole("button", { name: "Start recording" }).click();
+  await expect(
+    page.getByText("Finding your screens and windows…"),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Start recording" }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.evaluate(() => {
+    Reflect.get(
+      window,
+      "__resolveSources",
+    )([{ id: "screen:0:0", name: "Screen", thumbnail: "" }]);
+  });
+  await expect(page.locator(".source-picker")).toHaveCount(0);
+  await page.evaluate(() => {
+    Reflect.deleteProperty(window, "relayDesktop");
+  });
   await page.getByRole("button", { name: "Start recording" }).click();
   await expect(page.locator(".recorder-countdown")).toBeVisible();
   await expect(page.locator(".rec-live")).toContainText("Recording");

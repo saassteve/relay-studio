@@ -73,6 +73,8 @@ export function Recorder({
     [micTest, setMicTest] = useState(""),
     [title, setTitle] = useState(""),
     [sources, setSources] = useState<DesktopSource[] | null>(null),
+    [loadingSources, setLoadingSources] = useState(false),
+    [selectingSource, setSelectingSource] = useState<string | null>(null),
     [devices, setDevices] = useState<MediaDeviceInfo[]>([]),
     [microphoneId, setMicrophoneIdState] = useState(saved.microphoneId || ""),
     [cameraId, setCameraIdState] = useState(saved.cameraId || ""),
@@ -146,6 +148,8 @@ export function Recorder({
     return () => removeEventListener("beforeunload", warn);
   }, [phase]);
   const countdownDone = useRef<((go: boolean) => void) | null>(null);
+  const sourceRequest = useRef(0);
+  const sourceSelection = useRef(false);
   const runCountdown = (seconds: number) =>
     new Promise<boolean>((resolve) => {
       let n = seconds;
@@ -430,13 +434,29 @@ export function Recorder({
   };
   const begin = async () => {
     if (window.relayDesktop && mode !== "camera") {
+      if (sources !== null) return;
+      const request = ++sourceRequest.current;
+      setError("");
       setScreenBlocked(false);
+      setSources([]);
+      setLoadingSources(true);
       try {
-        setSources(await window.relayDesktop.sources());
+        const available = await window.relayDesktop.sources();
+        if (!mounted.current || request !== sourceRequest.current) return;
+        if (!available.length)
+          throw new Error(
+            "Relay couldn’t find a screen or window to record. Try again.",
+          );
+        setSources(available);
       } catch (e) {
+        if (!mounted.current || request !== sourceRequest.current) return;
+        setSources(null);
         if (/screen-permission|Failed to get sources/.test(String(e)))
           setScreenBlocked(true);
         else setError("Relay couldn’t list your screens. Try again.");
+      } finally {
+        if (mounted.current && request === sourceRequest.current)
+          setLoadingSources(false);
       }
     } else await start();
   };
@@ -499,33 +519,60 @@ export function Recorder({
       {sources ? (
         <div className="source-picker">
           <h3>Choose what to share</h3>
+          {loadingSources && (
+            <p role="status">
+              <LoaderCircle className="spin" size={18} /> Finding your screens
+              and windows…
+            </p>
+          )}
           <div className="sources">
             {sources.map((s) => (
               <button
                 key={s.id}
+                disabled={selectingSource !== null}
                 onClick={async () => {
+                  if (sourceSelection.current) return;
+                  sourceSelection.current = true;
+                  setSelectingSource(s.id);
                   try {
                     await window.relayDesktop!.selectSource(s.id);
+                    if (!mounted.current) return;
                     let selected: Region;
                     if (crop && window.relayDesktop?.selectRegion) {
                       const r = await window.relayDesktop.selectRegion(s.id);
                       if (!r) return;
                       selected = r;
                     }
+                    if (!mounted.current) return;
                     setSources(null);
                     void start(selected);
                   } catch (e) {
+                    if (!mounted.current) return;
                     setError((e as Error).message);
                     setSources(null);
+                  } finally {
+                    sourceSelection.current = false;
+                    if (mounted.current) setSelectingSource(null);
                   }
                 }}
               >
                 <img src={s.thumbnail} alt="" />
-                <span>{s.name}</span>
+                <span>
+                  {selectingSource === s.id ? "Opening " : ""}
+                  {s.name}
+                </span>
               </button>
             ))}
           </div>
-          <button className="btn" onClick={() => setSources(null)}>
+          <button
+            className="btn"
+            disabled={selectingSource !== null}
+            onClick={() => {
+              sourceRequest.current += 1;
+              setSources(null);
+              setLoadingSources(false);
+            }}
+          >
             Back
           </button>
         </div>
