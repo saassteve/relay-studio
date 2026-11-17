@@ -8,6 +8,16 @@ import {
 import type { CaptureSession } from "./media";
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// How much data a second a picture gets. A 1080p picture gets 6 megabits; a
+// larger one gets more, or its extra detail would be lost to compression. It
+// grows a little slower than the picture does, because larger pictures compress
+// better, and stops at 24 megabits.
+export function videoBitrate(stream: MediaStream) {
+  const { width = 1920, height = 1080 } =
+    stream.getVideoTracks()[0]?.getSettings() || {};
+  const size = (width * height) / (1920 * 1080);
+  return Math.round(Math.min(24e6, Math.max(6e6, 6e6 * size ** 0.85)));
+}
 
 export class RecordingEngine {
   capture: CaptureSession;
@@ -64,7 +74,7 @@ export class RecordingEngine {
         ...(mime ? { mimeType: mime } : {}),
         ...(audioOnly
           ? { audioBitsPerSecond: 128000 }
-          : { videoBitsPerSecond: 6000000 }),
+          : { videoBitsPerSecond: videoBitrate(stream) }),
       });
       let seq = 0;
       this.writes[index] = Promise.resolve();

@@ -40,3 +40,30 @@ jobs:
         with:
           name: relay-test-results
           path: test-results/
+  # The Mac app itself: the real Electron shell, driven through its own windows
+  # (tests/desktop.smoke.mjs). It runs from source, unsigned, and asks for no
+  # macOS permissions.
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+      # With the Electron binary this time: the test opens the app.
+      - run: npm ci
+      # The pinned, checksum-verified FFmpeg build the app runs from source with
+      # (desktop/ffmpeg-pins.cjs), kept between runs to spare its publisher.
+      - uses: actions/cache@v4
+        with:
+          path: vendor/ffmpeg/darwin-arm64
+          key: ffmpeg-darwin-arm64-${{ hashFiles('desktop/ffmpeg-pins.cjs') }}
+      - run: npm run desktop:provision
+      - run: npm run test:desktop
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: relay-desktop-test-results
+          path: test-results/

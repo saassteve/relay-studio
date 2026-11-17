@@ -45,9 +45,9 @@
 ## Why Relay
 
 - **It's yours.** Recordings live on your Mac or your own server. No sign-up, no telemetry, no upload you didn't ask for.
-- **It looks finished.** Wallpapers, rounded frames, auto-zoom, captions and titles come built in, so a first take is ready to send.
+- **It looks finished.** Every take comes out on a wallpaper with a rounded frame and auto-zoom. Captions and titles are a click away.
 - **It edits like a doc.** Delete a word and it's cut from the video. Everything can be undone and your original footage is never touched.
-- **It's free.** No time cap, no video quota, 4K included, MIT licensed.
+- **It's free.** No time cap, no video quota, up to 4K, MIT licensed.
 
 ## Install in a minute
 
@@ -90,7 +90,7 @@ The app is Mac-only for now. Everywhere else, [run Relay from source](#run-from-
   <img src="docs/images/editor.png" alt="The Relay editor: a live preview with a timeline of sections, titles, effects and layout changes underneath" width="100%">
 </p>
 
-The preview shows exactly what your viewers will get, as you edit. Underneath, a timeline lays out your sections, titles, zooms and layout changes as bars you can drag to move or stretch. Pause and drag text, arrows, boxes, blurs and the camera bubble right in the picture.
+The preview shows exactly what your viewers will get, as you edit. Underneath, a timeline lays out your sections, titles, zooms and layout changes. Drag the end of a section to trim it, or drag a section sideways to change the order. Titles, zooms and layout changes move and stretch the same way. Pause and drag text, arrows, boxes, blurs and the camera bubble right in the picture.
 
 Edits save themselves. One button, **Update video**, puts them into the file you share, and <kbd>⌘</kbd> <kbd>Z</kbd> takes back anything.
 
@@ -100,7 +100,7 @@ Edits save themselves. One button, **Update video**, puts them into the file you
   <img src="docs/images/transcript.png" alt="The Transcript tab, with a filler word struck through and cut from the video" width="100%">
 </p>
 
-Relay transcribes your video **on your Mac**. Click a word to jump to it, select a few and press <kbd>Delete</kbd> to cut them from the video. Remove every "um" and long pause in one go, fix a misheard word, or trim, split and reorder sections by hand.
+Relay transcribes your video **on your Mac**. Click a word to jump to it, select a few and press <kbd>Delete</kbd> to cut them from the video. Remove "um", "uh", "er" and long pauses in one go, fix a misheard word, or trim, split and reorder sections by hand.
 
 ### Videos that look finished
 
@@ -114,9 +114,9 @@ Relay transcribes your video **on your Mac**. Click a word to jump to it, select
 
 **Framed by default.** Every screen recording comes out on a wallpaper with rounded corners and a soft shadow. Pick from nine wallpapers and tune padding, corners and shadow.
 
-**Four layouts.** Camera bubble, side by side, screen only, or just you. Change layout partway through and Relay blends from one to the next.
+**Four layouts.** Camera bubble, side by side, screen only, or just you. Change layout partway through and the screen and camera glide to their new places.
 
-**Auto-zoom.** Point at something and pause. Relay zooms in smoothly and eases back out. Only the screen zooms; your camera stays put.
+**Auto-zoom.** Point at something and pause. Relay zooms in smoothly and eases back out. Only the screen zooms; your camera stays put. Automatic in recordings made with the Mac app; add zooms by hand anywhere.
 
 </td>
 <td width="50%" valign="top">
@@ -125,7 +125,7 @@ Relay transcribes your video **on your Mac**. Click a word to jump to it, select
 
 **Titles.** Title cards, name-and-role bars and chapter labels that match the rest of the video.
 
-**Callouts.** Text, arrows, boxes and blur for the parts people shouldn't miss, or shouldn't see.
+**Callouts.** Text, arrows, boxes and blur for the parts people shouldn't miss, or shouldn't see. A blur stays on what it covers when the picture zooms or the layout changes.
 
 </td>
 </tr>
@@ -148,7 +148,9 @@ Transcripts and basic summaries run on your Mac with no account. For better writ
 - **Fully local:** Ollama runs on your own machine.
 - **Or your own:** Claude (Anthropic) and ChatGPT (OpenAI).
 
-Relay then drafts a title, description, title card and chapters, and can turn a video into a message, a step-by-step guide, a bug report, a pull request description or a prompt for a coding agent.
+Relay then drafts a title, description, title card and chapters.
+
+From the transcript and summary, Relay can also lay a video out as a message, a step-by-step guide, a bug report, a pull request description or a prompt for a coding agent.
 
 It asks before any transcript leaves your computer.
 
@@ -156,7 +158,7 @@ It asks before any transcript leaves your computer.
 </tr>
 </table>
 
-**Let your assistant do the editing.** Relay has an [MCP](https://modelcontextprotocol.io) connector, so Claude, ChatGPT and other assistants can edit by chat: "cut the first 20 seconds, add a title card and switch to side by side for the demo". Every change they make is a draft you can undo.
+**Let your assistant do the editing.** Relay has an [MCP](https://modelcontextprotocol.io) connector, so an assistant can edit by chat: "cut the first 20 seconds, add a title card and switch to side by side for the demo". Every change it makes is a draft you can undo. Assistants that run on your computer, such as Claude Code, connect straight away. The Claude and ChatGPT web apps need Relay on a server with a public address.
 
 ### Record without the fuss
 
@@ -165,9 +167,9 @@ It asks before any transcript leaves your computer.
 <td width="56%"><img src="docs/images/recorder.png" alt="The recorder, with camera filters and backgrounds"></td>
 <td width="44%" valign="top">
 
-Screen and camera, screen only, or camera only, from a display, a window or any region you drag out. No time cap, 4K included.
+Screen and camera, screen only, or camera only, from a display, a window or, in the Mac app, a region of a display you drag out. No time cap, and up to 4K at 30 frames a second.
 
-- A draggable **camera bubble** with seven **filters** and **virtual backgrounds**: blur, four scenes or your own picture. People are cut out by a model that runs on your Mac.
+- A draggable **camera bubble** with six **filters** and **virtual backgrounds**: blur, four scenes or your own picture. People are cut out by a model that runs on your Mac.
 - A **3-2-1 countdown**, **speaker notes** in the floating controls, and a **marker** for drawing on screen.
 - **Never lose a take.** Recordings are saved to disk every second, so a crash can't cost you footage.
 
@@ -185,7 +187,7 @@ On your Mac, **Send** gives you the finished file, named after your video, ready
 
 Connect a Relay server in Settings and **Send** gives you a link anyone can open, which keeps playing your latest version each time you update it. The server is one you [run yourself](docs/LINKS.md), for free. Links can have passwords, expiry dates and invite-only access.
 
-Viewers get a clean player with speed control and captions. They can comment at the exact second, reply and react, and you see who watched and how far.
+Paste a link into Slack or Messages and it shows the video's title and picture. People who open it get a clean player with speed control and captions. They can comment at the exact second, reply and react, and you see how many people watched and where they stopped.
 
 </td>
 <td width="46%"><img src="docs/images/send.png" alt="The Send dialog, leading with Download video"></td>
@@ -214,6 +216,7 @@ Search everything with <kbd>⌘</kbd> <kbd>K</kbd>, star what matters and group 
 | <kbd>⌥</kbd> <kbd>⇧</kbd> <kbd>C</kbd> | Discard the take |
 | <kbd>⌘</kbd> <kbd>K</kbd> | Search your library |
 | <kbd>⌘</kbd> <kbd>Z</kbd> | Undo an edit |
+| <kbd>S</kbd> | Split the selected section where the video is paused |
 | <kbd>Space</kbd> | Play and pause |
 
 Relay also lives in your menu bar, with the timer and controls one click away.
@@ -224,18 +227,18 @@ Relay also lives in your menu bar, with the timer and controls one click away.
 | --- | :---: | :---: |
 | Price | Free and open source | Free tier, then from $18/user/month |
 | Recording length | Unlimited | 5 minutes on the free plan |
-| 4K recording | ✓ | Paid plans |
+| 4K recording | ✓ at 30 fps | Paid plans |
 | Where videos live | Your Mac or your server | Loom's cloud |
 | Camera filters and virtual backgrounds | ✓ on-device | ✓ |
 | Wallpapers, rounded frames and shadows | ✓ | — |
 | Switch layouts mid-video | ✓ | — |
-| Auto-zoom to key moments | ✓ | — |
+| Auto-zoom when you pause the pointer | ✓ Mac app | — |
 | Edit by deleting words | ✓ | ✓ |
 | Transcripts and summaries | ✓ on-device | Cloud AI, paid plan |
 | Bring your own AI provider | ✓ | — |
 | Filler and silence removal | ✓ | Paid plan |
-| Passwords and link expiry | ✓ | Paid plan |
-| Viewer analytics | ✓ | Engagement data on paid plans |
+| Passwords and link expiry | ✓ with your own server | Paid plan |
+| Viewer analytics | View counts and drop-off, with your own server | Named viewers on paid plans |
 | Stop and discard shortcuts on Mac | ✓ | — |
 | Export projects with original tracks | ✓ | — |
 | Self-host for a team | ✓ | — |
@@ -244,7 +247,9 @@ Relay also lives in your menu bar, with the timer and controls one click away.
 
 ## Privacy
 
-Nothing leaves your Mac unless you send it. The Mac app needs no sign-up and sends no telemetry. On its own it only ever downloads the video engine, once, and open-source AI models the first time you use transcription, summaries or backgrounds.
+Nothing leaves your Mac unless you send it. The Mac app needs no sign-up and sends no telemetry. On its own it downloads the video engine, once, and open-source AI models the first time you use transcription, summaries or backgrounds.
+
+It also keeps itself up to date: once a day it asks GitHub whether there is a newer Relay and downloads it if so, then installs it the next time you quit. That request carries no account, no identifier for you or your Mac and nothing about your library. It never happens during a recording, and can be turned off in **Settings → Desktop updates**.
 
 AI providers are off until you connect one, and Relay asks before a transcript leaves your computer.
 
@@ -253,6 +258,8 @@ Share links from the Mac app point to your own computer, so they work while Rela
 ## Good to know
 
 - On-device transcription and summaries need an Apple Silicon Mac. On Intel Macs everything else works, and you can import captions.
+- Recording above 1080p keeps more detail and makes larger files: a 4K recording is roughly three times the size of a 1080p one.
+- Comments, passwords, expiry dates and viewer numbers belong to links, so they need a Relay server. On its own the Mac app gives you a file.
 - The app is signed with a Developer ID and notarized by Apple. `npm run desktop:release` does the same for your own builds.
 
 ## Run from source

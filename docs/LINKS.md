@@ -6,7 +6,7 @@ Relay does that with one setting. Connect a Relay server you run, and **Send** i
 
 ## How it works
 
-1. Set up a Relay server with the [self-hosting guide](SELF-HOSTING.md). Docker or Node, about ten minutes.
+1. Set up a Relay server with the [self-hosting guide](SELF-HOSTING.md). Docker or Node. It needs a machine that stays on, a domain name and HTTPS in front of it.
 2. On the server, open **Settings → Links that work anywhere** and copy the address and access key.
 3. In the Relay app, open the same place in Settings, paste them in and choose **Connect**.
 4. Open a video, choose **Send**, then **Get a link**.

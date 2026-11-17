@@ -12,6 +12,7 @@ const {
   Tray,
   nativeImage,
   dialog,
+  nativeTheme,
 } = require("electron");
 const { spawn, execFile } = require("node:child_process");
 const { randomBytes } = require("node:crypto");
@@ -25,8 +26,15 @@ let mainWindow,
   selectedDisplay,
   nativeStudio,
   captureUI,
+  updates,
   tray,
   hiddenForRecording = false,
+  // A countdown is on screen, and when the last one ended.
+  preparing = false,
+  prepared = 0,
+  // Whether a recording was running, and when the last one stopped.
+  wasRecording = false,
+  recordingEnded = 0,
   quitting = false,
   // The recording may end without asking: Relay is relaunching, or the user has
   // already agreed to it for the quit under way.
@@ -158,12 +166,54 @@ function confirmEndRecording() {
     : dialog.showMessageBoxSync(options);
   return choice === 1;
 }
+// A recording is being set up or made, or its last pieces are still being saved.
+// Nothing may ask for attention or restart Relay meanwhile (desktop/updates.cjs).
+function recordingBusy() {
+  return (
+    Boolean(nativeStudio?.state().active) ||
+    hiddenForRecording ||
+    preparing ||
+    Date.now() - Math.max(prepared, recordingEnded) < 60000
+  );
+}
+// Whether the library is still rendering or processing a video. null when that
+// can't be found out.
+async function libraryBusy() {
+  // A library on a server carries on without this app.
+  if (process.env.RELAY_SERVER_URL) return false;
+  if (!server) return null;
+  try {
+    const response = await fetch(`${baseURL}/api/jobs`, {
+      headers: { Cookie: `relay_local=${localSecret}` },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) return null;
+    return (await response.json()).some((job) =>
+      ["queued", "running"].includes(job.status),
+    );
+  } catch {
+    return null;
+  }
+}
 function showStudio() {
   if (quitting) return;
   if (!mainWindow) return void createWindow();
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
+}
+// Small choices the shell needs before any window exists (desktop/updates.cjs
+// keeps its own there too).
+const THEMES = ["system", "light", "dark"];
+const desktopSettings = () =>
+  path.join(app.getPath("userData"), "desktop-settings.json");
+function savedSettings() {
+  try {
+    const saved = JSON.parse(fs.readFileSync(desktopSettings(), "utf8"));
+    return saved && typeof saved === "object" ? saved : {};
+  } catch {
+    return {};
+  }
 }
 function trusted(event) {
   return (
@@ -185,12 +235,16 @@ function studioURL(url) {
 }
 async function createWindow() {
   if (quitting) return;
+  const theme = savedSettings().theme;
+  if (THEMES.includes(theme)) nativeTheme.themeSource = theme;
   mainWindow = new BrowserWindow({
     width: 1450,
     height: 980,
     minWidth: 850,
     minHeight: 650,
-    backgroundColor: "#fbfcf8",
+    // The page's own colour in each theme (--paper in src/styles.css), so a
+    // dark system doesn't open the window on a white flash.
+    backgroundColor: nativeTheme.shouldUseDarkColors ? "#0f1814" : "#fbfcf8",
     title: "Relay",
     autoHideMenuBar: true,
     webPreferences: {
@@ -427,6 +481,9 @@ app
               else nativeStudio.send(action);
             });
         }
+        if (wasRecording && !active) recordingEnded = Date.now();
+        wasRecording = active;
+        updates?.recordingChanged(active);
         if (!active) {
           discardPrompt?.abort();
           captureUI.dispose();
@@ -443,6 +500,18 @@ app
       captureBounds,
       region: () => nativeStudio.region(),
       baseURL: () => baseURL,
+    });
+    updates = require("./updates.cjs")({
+      trusted,
+      window: () => mainWindow,
+      recording: recordingBusy,
+      working: libraryBusy,
+      // Restarting into an update: nothing objects to the windows closing, and
+      // nothing reopens them. If the restart fails, the studio comes back.
+      onRestart(going) {
+        quitting = leaving = going;
+        if (!going) showStudio();
+      },
     });
     ipcMain.handle("relay:info", (event) => {
       if (!trusted(event)) throw new Error("Untrusted request");
@@ -503,6 +572,22 @@ app
     // macOS ties Screen Recording access to how an app is signed. A grant given to
     // an older copy of Relay can still show as switched on in System Settings while
     // being refused for this one. Clearing Relay's entry makes macOS ask again.
+    // Light, dark or the system's choice, picked in Settings. The app's page
+    // keeps its own copy; this one makes the window, its menus and its dialogs
+    // match, from the first moment of the next launch too.
+    ipcMain.handle("relay:theme", (event, theme) => {
+      if (!trusted(event)) throw new Error("Untrusted request");
+      if (!THEMES.includes(theme)) return;
+      nativeTheme.themeSource = theme;
+      try {
+        fs.writeFileSync(
+          desktopSettings(),
+          JSON.stringify({ ...savedSettings(), theme }, null, 2),
+        );
+      } catch (error) {
+        console.error(error);
+      }
+    });
     ipcMain.handle("relay:reset-screen-permission", async (event) => {
       if (!trusted(event)) throw new Error("Untrusted request");
       if (process.platform !== "darwin" || !app.isPackaged) return false;
@@ -519,11 +604,13 @@ app
     ipcMain.handle("relay:prepare-recording", async (event, options = {}) => {
       if (!trusted(event)) throw new Error("Untrusted request");
       const screenCapture = options.screen === true;
+      preparing = true;
+      updates.recordingChanged(true);
       if (screenCapture && options.hideWindow !== false && mainWindow) {
         hiddenForRecording = true;
         mainWindow.hide();
       }
-      const result = await captureUI.prepare({
+      const countdown = captureUI.prepare({
         countdownSeconds: [0, 3, 5].includes(options.countdown)
           ? options.countdown
           : 3,
@@ -538,6 +625,11 @@ app
             : null,
         draw: screenCapture && Boolean(captureBounds()),
       });
+      const result = await countdown.finally(() => {
+        preparing = false;
+        prepared = Date.now();
+      });
+      if (result.cancelled) updates.recordingChanged(false);
       if (result.cancelled && hiddenForRecording) {
         hiddenForRecording = false;
         showStudio();

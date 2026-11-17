@@ -26,8 +26,8 @@ On Linux, install your distribution's `ffmpeg` and set `FFMPEG_BIN=/usr/bin/ffmp
 | Variable | Purpose |
 | --- | --- |
 | `HOST`, `PORT` | Listen address. Any non-local `HOST` requires `ADMIN_PASSWORD` (12+ characters). |
-| `ADMIN_PASSWORD`, `ADMIN_EMAIL` | Workspace owner sign-in. |
-| `PUBLIC_URL` | The exact HTTPS origin people use. Put Relay behind an HTTPS reverse proxy. |
+| `ADMIN_PASSWORD`, `ADMIN_EMAIL` | Workspace owner sign-in. The password is the owner's first one; a new value here replaces whatever the owner has since chosen. |
+| `PUBLIC_URL` | The exact HTTPS origin people use. Put Relay behind an HTTPS reverse proxy. Link previews in chat apps use this address too. |
 | `TRUST_PROXY` | Set this behind a reverse proxy so Relay sees each visitor's own address (it limits repeated attempts per address). Use the number of proxies in front of Relay, usually `1`, or a comma-separated list of their addresses or subnets such as `10.0.0.0/8`. `true` trusts every proxy, so only use it when Relay can't be reached directly. Leave it unset when there is no proxy. |
 | `DATA_DIR` | Where the library, media and models are stored. Back it up with the server stopped. |
 | `FFMPEG_BIN` | Path to the FFmpeg executable. |
@@ -53,6 +53,8 @@ The app then records into the server's library and its share links work everywhe
 ## Team features
 
 - Owner, editor and viewer roles. Invitations create expiring links you send yourself.
+- Passwords: everyone changes their own in **Settings**. For a member who has forgotten theirs, the owner makes a reset link from the members list (the key button) and sends it to them; it works once and lasts 24 hours. `ADMIN_PASSWORD` is the owner's first password, and the way back in if the owner forgets theirs: set a new value and restart Relay. Restarting with the same value leaves a password the owner has since chosen alone.
+- Invitation and reset links are shown once, when they are made. Relay keeps only a hash of each, so a lost link is replaced with a new one.
 - Per-video access: anyone with the link, workspace members, or invited people only. Plus passwords, expiry and download control.
 - Comments with replies, resolve, reactions and `@mentions`, with in-app notifications.
 

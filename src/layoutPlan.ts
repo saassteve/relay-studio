@@ -43,6 +43,39 @@ const fit = (
   }
   return { x: f.x + (f.w - w) / 2, y: f.y + (f.h - h) / 2, w, h };
 };
+// Where an effect placed on the frame sits on the screen picture, as fractions
+// of the picture. Null when its middle is not over the picture at all. Mirrors
+// onScreen in server/studio/compose.mjs.
+export function onScreen(
+  effect: { x: number; y: number; w: number; h: number },
+  screen: Box | null,
+  W: number,
+  H: number,
+) {
+  if (!screen) return null;
+  const left = effect.x * W,
+    top = effect.y * H,
+    wide = effect.w * W,
+    high = effect.h * H,
+    cx = left + wide / 2,
+    cy = top + high / 2;
+  if (
+    cx < screen.x ||
+    cx > screen.x + screen.w ||
+    cy < screen.y ||
+    cy > screen.y + screen.h
+  )
+    return null;
+  const within = (n: number) => Math.max(0, Math.min(1, n)),
+    x = within((left - screen.x) / screen.w),
+    y = within((top - screen.y) / screen.h);
+  return {
+    x,
+    y,
+    w: within((left + wide - screen.x) / screen.w) - x,
+    h: within((top + high - screen.y) / screen.h) - y,
+  };
+}
 export function planLayout(
   layout: Project["layout"],
   preset: LayoutPreset,

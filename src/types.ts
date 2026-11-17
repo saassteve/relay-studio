@@ -44,6 +44,26 @@ export interface DesktopSource {
   name: string;
   thumbnail: string;
 }
+// What the Mac app is doing about its own updates (desktop/updates.cjs).
+export interface DesktopUpdateState {
+  // "auto" installs updates itself, "manual" can only point to the download
+  // page, "none" is a copy run from source.
+  mode: "auto" | "manual" | "none";
+  // It would update itself if it were in the Applications folder.
+  misplaced: boolean;
+  automatic: boolean;
+  version: string;
+  status:
+    | "idle"
+    | "checking"
+    | "current"
+    | "downloading"
+    | "preparing"
+    | "ready"
+    | "failed";
+  latest?: string;
+  percent?: number;
+}
 declare global {
   interface Window {
     relayDesktop?: {
@@ -69,7 +89,12 @@ declare global {
         systemAudio: boolean;
       }>;
       notify?: (message: string) => void;
+      setTheme?: (theme: "system" | "light" | "dark") => Promise<void>;
       checkForUpdates?: () => Promise<{ status: string; url?: string }>;
+      updateState?: () => Promise<DesktopUpdateState>;
+      setAutomaticUpdates?: (on: boolean) => Promise<DesktopUpdateState>;
+      restartToUpdate?: () => Promise<{ ok: boolean; status: string }>;
+      onUpdateState?: (fn: (state: DesktopUpdateState) => void) => () => void;
       info?: () => Promise<{
         version: string;
         packaged: boolean;

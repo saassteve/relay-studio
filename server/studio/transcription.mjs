@@ -304,7 +304,11 @@ export function createTranscription({ db, dataDir, find, renderer }) {
         });
     }
     const filler = parseJSON(v.transcript, [])
-      .filter((w) => /^(um+|uh+|erm+|ah+)\W*$/i.test(w.text.trim()))
+      // Sounds people make while they think. Whole words only, and none that
+      // is also a word with a meaning, such as "like" or "so".
+      .filter((w) =>
+        /^(u+m+|u+h+|e+r+m*|a+h+|h+m+|m+-?h+m+|m{2,})\W*$/i.test(w.text.trim()),
+      )
       .map((w) => ({
         sourceId: v.id,
         start: w.start,

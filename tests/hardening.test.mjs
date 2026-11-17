@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -401,8 +402,16 @@ test("malformed requests are refused instead of crashing or cutting everything",
     });
   assert.equal((await accept(second.token)).status, 201);
   // An older invitation for someone who has since joined is a conflict.
+  // Only a hash of an invitation's link is stored, never the link.
+  assert.deepEqual(
+    db
+      .prepare("SELECT token FROM invitations")
+      .all()
+      .filter((row) => [first.token, second.token].includes(row.token)),
+    [],
+  );
   db.prepare("INSERT INTO invitations VALUES(?,?,?,?,?,0)").run(
-    "leftover-invitation",
+    createHash("sha256").update("leftover-invitation").digest("hex"),
     "new@example.com",
     "New",
     "editor",
@@ -558,4 +567,48 @@ test("an imported outline keeps only fields of the right kind", async () => {
       projectSegments: "[]",
     },
   );
+});
+
+test("invitation links sent before they were stored as hashes keep working", async (t) => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "relay-invite-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  // A library as an earlier version left it: the link itself in the database.
+  const before = createApp({ dataDir: dir, password: "owner-password-123" });
+  before.db
+    .prepare("INSERT INTO invitations VALUES(?,?,?,?,?,0)")
+    .run(
+      "a-link-sent-last-week",
+      "sam@example.com",
+      "Sam",
+      "editor",
+      Date.now() + 86400000,
+    );
+  before.db
+    .prepare("DELETE FROM settings WHERE key='invitations_hashed'")
+    .run();
+  before.close();
+  const { app, db, close } = createApp({
+    dataDir: dir,
+    password: "owner-password-123",
+  });
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise((r) => server.once("listening", r));
+  t.after(async () => {
+    await new Promise((r) => server.close(r));
+    close();
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  assert.deepEqual(
+    db
+      .prepare("SELECT token FROM invitations")
+      .all()
+      .map((r) => r.token.length),
+    [64],
+  );
+  const opened = await fetch(`${base}/api/invitations/a-link-sent-last-week`);
+  assert.equal(opened.status, 200);
+  assert.equal((await opened.json()).email, "sam@example.com");
+  // What the database holds is not a link anyone can use.
+  const stored = db.prepare("SELECT token FROM invitations").get().token;
+  assert.equal((await fetch(`${base}/api/invitations/${stored}`)).status, 404);
 });

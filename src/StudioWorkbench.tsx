@@ -58,6 +58,17 @@ const OVERLAY_NAMES: Record<string, string> = {
   blur: "Blur",
   cursor: "Dot",
 };
+// The ways an arrow can point, as in server/studio/project.mjs.
+const ARROWS = [
+  ["→", "Right"],
+  ["←", "Left"],
+  ["↑", "Up"],
+  ["↓", "Down"],
+  ["↗", "Up and right"],
+  ["↘", "Down and right"],
+  ["↙", "Down and left"],
+  ["↖", "Up and left"],
+] as const;
 export const StudioWorkbench = forwardRef<
   WorkbenchHandle,
   {
@@ -229,13 +240,37 @@ export const StudioWorkbench = forwardRef<
       setSaving(false);
     }
   };
+  // Whether a mouse button, a finger or a key is being held down anywhere.
+  const held = useRef(false);
+  useEffect(() => {
+    const down = () => (held.current = true),
+      up = () => (held.current = false);
+    const events: [string, () => void][] = [
+      ["pointerdown", down],
+      ["keydown", down],
+      ["pointerup", up],
+      ["pointercancel", up],
+      ["keyup", up],
+      ["blur", up],
+    ];
+    for (const [name, fn] of events) addEventListener(name, fn, true);
+    return () => {
+      for (const [name, fn] of events) removeEventListener(name, fn, true);
+    };
+  }, []);
   // Edits save themselves a moment after you stop.
   useEffect(() => {
     if (!dirty || !project) return;
-    const timer = setTimeout(
-      () => void persist().catch((e) => setError((e as Error).message)),
-      900,
-    );
+    const timer = setTimeout(() => {
+      if (trimFrom.current) {
+        // A trim that is still being dragged saves once, when it is let go.
+        // One that nothing is holding (a value set by an assistive tool, say)
+        // has ended without saying so: finish it, and it saves next time round.
+        if (!held.current) settleTrim();
+        return;
+      }
+      void persist().catch((e) => setError((e as Error).message));
+    }, 900);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project, dirty]);
@@ -470,7 +505,7 @@ export const StudioWorkbench = forwardRef<
     const offset = sectionStart(from.i),
       head = now.start - from.start,
       tail = now.end - from.end;
-    if (!head && !tail) return;
+    // Also when the handle ended where it began: saving waited for the gesture.
     edit((p) => {
       // The end first, measured on the old timeline, so the two don't interfere.
       if (tail < 0) removeSpan(p, offset + now.end - from.start, -tail);
@@ -484,6 +519,69 @@ export const StudioWorkbench = forwardRef<
     onKeyUp: settleTrim,
     onBlur: settleTrim,
   };
+  // How long the footage behind a section is.
+  const footageLength = (section: { sourceId: string; end: number }) =>
+    Math.max(
+      section.end,
+      section.sourceId === clip.id
+        ? state.sourceDuration
+        : (footage[section.sourceId] ??
+            videos.find((v) => v.id === section.sourceId)?.duration ??
+            0),
+    );
+  // Move one end of a section, from the trim sliders or the timeline. Every call
+  // until settleTrim belongs to one gesture, which is one step to undo.
+  const trimSection = (i: number, edge: "start" | "end", to: number) => {
+    if (trimFrom.current && trimFrom.current.i !== i) settleTrim();
+    const now = latest.current?.segments[i];
+    if (!now) return;
+    const value =
+      edge === "start"
+        ? Math.max(0, Math.min(to, now.end - 0.2))
+        : Math.min(footageLength(now), Math.max(to, now.start + 0.2));
+    if (value === now[edge]) return;
+    trimFrom.current ??= { i, ...now };
+    edit((p) => (p.segments[i][edge] = value));
+    setSelected(i);
+    // Show the new first or last frame while the handle moves.
+    requestAnimationFrame(() =>
+      onSeek(
+        sectionStart(i) +
+          (edge === "start" ? 0 : Math.max(0, value - now.start - 0.05)),
+      ),
+    );
+  };
+  // Put a section somewhere else in the order, one neighbour at a time, so titles
+  // and effects stay over the footage they were put on.
+  const moveSection = (from: number, to: number) => {
+    const count = latest.current?.segments.length ?? 0;
+    if (from === to || Math.min(from, to) < 0 || Math.max(from, to) >= count)
+      return;
+    edit((p) => {
+      const way = to > from ? 1 : -1;
+      for (let i = from; i !== to; i += way) {
+        const at = Math.min(i, i + way);
+        const [first, second] = [p.segments[at], p.segments[at + 1]];
+        p.segments[at] = second;
+        p.segments[at + 1] = first;
+        swapSpans(
+          p,
+          p.segments.slice(0, at).reduce((n, x) => n + x.end - x.start, 0),
+          first.end - first.start,
+          second.end - second.start,
+        );
+      }
+    });
+    setSelected(to);
+  };
+  const removeSection = (i: number) => {
+    if (project.segments.length < 2 || !project.segments[i]) return;
+    edit((p) => {
+      const [gone] = p.segments.splice(i, 1);
+      removeSpan(p, sectionStart(i), gone.end - gone.start);
+    });
+    setSelected(i <= selected ? Math.max(0, selected - 1) : selected);
+  };
   // Where a moment in some footage sits in the edited video, or null if it was cut.
   const onTimeline = (source: string, at: number) => {
     let t = 0;
@@ -495,14 +593,7 @@ export const StudioWorkbench = forwardRef<
     return null;
   };
   // How long the footage behind the selected section is.
-  const selectedMax = Math.max(
-    selectedSection.end,
-    selectedSection.sourceId === clip.id
-      ? state.sourceDuration
-      : (footage[selectedSection.sourceId] ??
-          videos.find((v) => v.id === selectedSection.sourceId)?.duration ??
-          0),
-  );
+  const selectedMax = footageLength(selectedSection);
   // Which section the playhead is in, and where that is in the original footage.
   const playhead = () => {
     const t = player.current?.time() ?? 0;
@@ -519,6 +610,24 @@ export const StudioWorkbench = forwardRef<
       section,
       source: Math.min(section.end, section.start + Math.max(0, t - offset)),
     };
+  };
+  // Cut the section under the playhead in two, from the button or the S key.
+  const splitHere = () => {
+    const here = playhead();
+    if (
+      here.source > here.section.start + 0.2 &&
+      here.source < here.section.end - 0.2
+    ) {
+      edit((p) =>
+        p.segments.splice(
+          here.i,
+          1,
+          { ...here.section, end: here.source },
+          { ...here.section, start: here.source },
+        ),
+      );
+      setSelected(here.i + 1);
+    } else notify("Move the playhead inside a section to split it.");
   };
   const saveOutline = () => {
     if (JSON.stringify(outline) === JSON.stringify(clip.outline || {})) return;
@@ -595,6 +704,21 @@ export const StudioWorkbench = forwardRef<
             maxLength={500}
             onChange={(e) => edit((p) => (p.overlays[i].text = e.target.value))}
           />
+        </label>
+      )}
+      {o.type === "arrow" && (
+        <label>
+          Points
+          <select
+            value={o.text || "→"}
+            onChange={(e) => edit((p) => (p.overlays[i].text = e.target.value))}
+          >
+            {ARROWS.map(([arrow, way]) => (
+              <option key={arrow} value={arrow}>
+                {arrow} {way}
+              </option>
+            ))}
+          </select>
         </label>
       )}
       {(o.type === "title" || o.type === "lowerthird") && (
@@ -773,6 +897,11 @@ export const StudioWorkbench = forwardRef<
             edit={edit}
             marker={marker}
             names={OVERLAY_NAMES}
+            onTrim={trimSection}
+            onTrimEnd={settleTrim}
+            onMove={moveSection}
+            onRemove={removeSection}
+            onSplit={splitHere}
             onPick={(key) => {
               // Open the Look tab at this item's settings.
               setTab("style");
@@ -921,8 +1050,10 @@ export const StudioWorkbench = forwardRef<
         <div className="studio-content" {...tabPanel("studio-edit")}>
           <p className="studio-hint">
             Your video is made of sections. Trim a section’s start or end, split
-            it where the video is paused, or remove it. Nothing is ever deleted
-            from the original recording.
+            it where the video is paused, or remove it. On the timeline, drag
+            the end of a section to trim it, or drag a section sideways to
+            change the order. Nothing is ever deleted from the original
+            recording.
           </p>
           <div className="cut-editor">
             <div className="cut-heading">
@@ -951,16 +1082,9 @@ export const StudioWorkbench = forwardRef<
                 step={0.05}
                 value={selectedSection.start}
                 {...trimGesture}
-                onChange={(e) => {
-                  trimFrom.current ??= { i: selected, ...selectedSection };
-                  const v = Math.min(
-                    +e.target.value,
-                    selectedSection.end - 0.2,
-                  );
-                  edit((p) => (p.segments[selected].start = Math.max(0, v)));
-                  // Show the new first frame while the handle moves.
-                  requestAnimationFrame(() => onSeek(sectionStart(selected)));
-                }}
+                onChange={(e) =>
+                  trimSection(selected, "start", +e.target.value)
+                }
               />
               <input
                 type="range"
@@ -971,22 +1095,7 @@ export const StudioWorkbench = forwardRef<
                 step={0.05}
                 value={selectedSection.end}
                 {...trimGesture}
-                onChange={(e) => {
-                  trimFrom.current ??= { i: selected, ...selectedSection };
-                  const v = Math.max(
-                    +e.target.value,
-                    selectedSection.start + 0.2,
-                  );
-                  const end = Math.min(selectedMax, v);
-                  edit((p) => (p.segments[selected].end = end));
-                  // Show the new last frame while the handle moves.
-                  requestAnimationFrame(() =>
-                    onSeek(
-                      sectionStart(selected) +
-                        Math.max(0, end - selectedSection.start - 0.05),
-                    ),
-                  );
-                }}
+                onChange={(e) => trimSection(selected, "end", +e.target.value)}
               />
             </div>
             <div className="cut-actions">
@@ -1026,27 +1135,7 @@ export const StudioWorkbench = forwardRef<
               >
                 End here
               </button>
-              <button
-                className="btn small"
-                onClick={() => {
-                  const here = playhead();
-                  if (
-                    here.source > here.section.start + 0.2 &&
-                    here.source < here.section.end - 0.2
-                  ) {
-                    edit((p) =>
-                      p.segments.splice(
-                        here.i,
-                        1,
-                        { ...here.section, end: here.source },
-                        { ...here.section, start: here.source },
-                      ),
-                    );
-                    setSelected(here.i + 1);
-                  } else
-                    notify("Move the playhead inside a section to split it.");
-                }}
-              >
+              <button className="btn small" onClick={splitHere}>
                 <Scissors size={14} />
                 Split here
               </button>
@@ -1055,23 +1144,7 @@ export const StudioWorkbench = forwardRef<
                 className="btn small"
                 aria-label="Move section earlier"
                 disabled={selected === 0}
-                onClick={() => {
-                  edit((p) => {
-                    const [before, moved] = [
-                      p.segments[selected - 1],
-                      p.segments[selected],
-                    ];
-                    p.segments[selected - 1] = moved;
-                    p.segments[selected] = before;
-                    swapSpans(
-                      p,
-                      sectionStart(selected - 1),
-                      before.end - before.start,
-                      moved.end - moved.start,
-                    );
-                  });
-                  setSelected(selected - 1);
-                }}
+                onClick={() => moveSection(selected, selected - 1)}
               >
                 <ArrowUp size={14} />
                 Earlier
@@ -1080,23 +1153,7 @@ export const StudioWorkbench = forwardRef<
                 className="btn small"
                 aria-label="Move section later"
                 disabled={selected === project.segments.length - 1}
-                onClick={() => {
-                  edit((p) => {
-                    const [moved, after] = [
-                      p.segments[selected],
-                      p.segments[selected + 1],
-                    ];
-                    p.segments[selected] = after;
-                    p.segments[selected + 1] = moved;
-                    swapSpans(
-                      p,
-                      sectionStart(selected),
-                      moved.end - moved.start,
-                      after.end - after.start,
-                    );
-                  });
-                  setSelected(selected + 1);
-                }}
+                onClick={() => moveSection(selected, selected + 1)}
               >
                 <ArrowDown size={14} />
                 Later
@@ -1104,17 +1161,7 @@ export const StudioWorkbench = forwardRef<
               <button
                 className="btn small danger"
                 disabled={project.segments.length === 1}
-                onClick={() => {
-                  edit((p) => {
-                    const [gone] = p.segments.splice(selected, 1);
-                    removeSpan(
-                      p,
-                      sectionStart(selected),
-                      gone.end - gone.start,
-                    );
-                  });
-                  setSelected(Math.max(0, selected - 1));
-                }}
+                onClick={() => removeSection(selected)}
               >
                 <Trash2 size={14} />
                 Remove section
@@ -1857,7 +1904,12 @@ export const StudioWorkbench = forwardRef<
                         w: 0.3,
                         h: 0.15,
                         scale: 1.8,
-                        text: type === "text" ? "Your text" : "",
+                        text:
+                          type === "text"
+                            ? "Your text"
+                            : type === "arrow"
+                              ? "→"
+                              : "",
                         color: "#d6f475",
                       }),
                     )

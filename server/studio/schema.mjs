@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 export function migrateStudio(db) {
   const add = (table, name, declaration) => {
     if (
@@ -41,7 +42,20 @@ export function migrateStudio(db) {
     CREATE TABLE IF NOT EXISTS members(id TEXT PRIMARY KEY,email TEXT UNIQUE NOT NULL,name TEXT NOT NULL,role TEXT NOT NULL,password TEXT NOT NULL,created TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS member_sessions(id TEXT PRIMARY KEY,member_id TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS invitations(token TEXT PRIMARY KEY,email TEXT NOT NULL,name TEXT NOT NULL,role TEXT NOT NULL,expires INTEGER NOT NULL,accepted INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS password_resets(token_hash TEXT PRIMARY KEY,member_id TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);`);
+  // Invitation links used to be stored as they were sent. Now only their hashes
+  // are, so the links already sent keep working and the database holds none.
+  if (
+    !db.prepare("SELECT 1 FROM settings WHERE key='invitations_hashed'").get()
+  ) {
+    for (const { token } of db.prepare("SELECT token FROM invitations").all())
+      db.prepare("UPDATE invitations SET token=? WHERE token=?").run(
+        createHash("sha256").update(token).digest("hex"),
+        token,
+      );
+    db.prepare("INSERT INTO settings VALUES('invitations_hashed','1')").run();
+  }
   db.prepare(
     "UPDATE jobs SET status='queued',progress=0 WHERE status='running'",
   ).run();

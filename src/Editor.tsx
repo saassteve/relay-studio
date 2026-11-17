@@ -270,6 +270,25 @@ export function Editor({
     }
   };
   // However the dialog is closed, what was typed in it is kept.
+  const turnOffLink = async () => {
+    if (
+      !(await confirmDialog({
+        title: "Turn off this link?",
+        body: "Anyone who has the link will no longer be able to watch. You can create a new link later.",
+        confirm: "Turn off link",
+        destructive: true,
+      }))
+    )
+      return;
+    try {
+      await api(`/api/videos/${clip.id}/share`, { method: "DELETE" });
+      update({ ...clip, token: null });
+      setSharing(false);
+      notify("Share link turned off");
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
   const closeShare = async () => {
     if (await saveShare.current()) setSharing(false);
   };
@@ -1021,6 +1040,13 @@ export function Editor({
                         saveRef={saveShare}
                         onDirty={setShareDirty}
                       />
+                      <button
+                        className="text-button danger"
+                        onClick={() => void turnOffLink()}
+                      >
+                        <Unlink size={15} />
+                        Turn off this page
+                      </button>
                     </>
                   )}
                 </div>
@@ -1057,30 +1083,12 @@ export function Editor({
             </div>
           )}
           <div className="dialog-footer">
+            {/* On someone's own computer this belongs with the share page it
+                turns off, not beside the download. */}
             <button
               className="text-button danger"
-              hidden={!clip.token}
-              onClick={async () => {
-                if (
-                  !(await confirmDialog({
-                    title: "Turn off this link?",
-                    body: "Anyone who has the link will no longer be able to watch. You can create a new link later.",
-                    confirm: "Turn off link",
-                    destructive: true,
-                  }))
-                )
-                  return;
-                try {
-                  await api(`/api/videos/${clip.id}/share`, {
-                    method: "DELETE",
-                  });
-                  update({ ...clip, token: null });
-                  setSharing(false);
-                  notify("Share link turned off");
-                } catch (e) {
-                  setError((e as Error).message);
-                }
-              }}
+              hidden={!clip.token || localOnly}
+              onClick={() => void turnOffLink()}
             >
               <Unlink size={15} />
               Turn off link

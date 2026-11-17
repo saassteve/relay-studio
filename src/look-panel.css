@@ -4,7 +4,7 @@
   border-radius: 12px;
   overflow: hidden;
   container-type: inline-size;
-  box-shadow: 0 10px 40px #173e3222;
+  box-shadow: 0 10px 40px var(--dark-shadow-1, #173e3222);
 }
 .look-canvas > video {
   position: absolute;
@@ -31,7 +31,7 @@
 }
 .look-group > strong {
   font-size: 13px;
-  color: var(--pine);
+  color: var(--heading);
 }
 .wallpaper-grid {
   display: grid;
@@ -42,10 +42,10 @@
   aspect-ratio: 16/10;
   border-radius: 8px;
   border: 1px solid var(--border);
-  background: #f1f4ea center / cover;
+  background: var(--dark-well, #f1f4ea) center / cover;
   display: grid;
   place-items: center;
-  color: #5c685f;
+  color: var(--muted);
   outline: 2px solid transparent;
   outline-offset: 2px;
   transition: transform 0.15s;
@@ -54,7 +54,7 @@
   transform: scale(1.04);
 }
 .wallpaper-grid button.selected {
-  outline-color: var(--pine);
+  outline-color: var(--accent);
 }
 .look-sliders label {
   display: grid;
@@ -75,15 +75,15 @@
   padding: 8px 6px;
   border-radius: 10px;
   border: 1px solid var(--border);
-  background: #fffffb;
+  background: var(--surface);
   font-size: 13px;
   font-weight: 550;
-  color: #5d6b61;
+  color: var(--dark-muted, #5d6b61);
 }
 .preset-tiles button.selected {
-  border-color: var(--pine);
-  background: #eef2e6;
-  color: var(--pine);
+  border-color: var(--accent);
+  background: var(--dark-accent-wash, #eef2e6);
+  color: var(--heading);
 }
 .preset-tiles.small {
   display: inline-flex;
@@ -154,7 +154,7 @@
   position: relative;
   height: 8px;
   border-radius: 8px;
-  background: #e6ebdf;
+  background: var(--dark-well, #e6ebdf);
   margin-top: 4px;
 }
 .scene-strip i {
@@ -162,10 +162,10 @@
   top: 0;
   bottom: 0;
   border-radius: 8px;
-  background: #8fb35a;
+  background: var(--dark-accent-dim, #8fb35a);
 }
 .scene-strip i.active {
-  background: var(--pine);
+  background: var(--accent);
 }
 .scene-row {
   display: flex;
@@ -174,12 +174,12 @@
   padding: 7px 9px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: #fffffb;
+  background: var(--surface);
   font-size: 13px;
   cursor: pointer;
 }
 .scene-row.active {
-  border-color: #8fb35a;
+  border-color: var(--dark-accent, #8fb35a);
 }
 .scene-row label {
   display: inline-flex;

@@ -211,7 +211,7 @@ test("capture, edit, export, share, comment, revoke; responsive library", async 
     fullPage: true,
   });
   // Turning a link off asks first.
-  await page.getByRole("button", { name: "Turn off link" }).click();
+  await page.getByRole("button", { name: "Turn off this page" }).click();
   await page
     .getByRole("alertdialog", { name: "Turn off this link?" })
     .getByRole("button", { name: "Turn off link" })

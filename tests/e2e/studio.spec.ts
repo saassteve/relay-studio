@@ -31,6 +31,108 @@ test("reversible sections, captions, presentation, access and offline shell", as
   await expect(page.locator(".tl-clips>button")).toHaveCount(1);
   await page.getByRole("button", { name: "Redo", exact: true }).click();
   await expect(page.locator(".tl-clips>button")).toHaveCount(2);
+  // Sections are edited on the timeline itself. Each gesture is one step to undo.
+  const sections = page.locator(".tl-clips>button");
+  const trimStart = page.getByLabel("Section start", { exact: true });
+  const trimEnd = page.getByLabel("Section end", { exact: true });
+  const heading = page.locator(".cut-heading strong");
+  const saved = () =>
+    expect(page.locator(".save-state")).toHaveText(
+      /^Edits saved\. Update the video/,
+    );
+  const undo = async () => {
+    await saved();
+    await page.getByRole("button", { name: "Undo", exact: true }).click();
+    await expect(page.locator(".studio-job")).toHaveCount(0);
+  };
+  // Press on one point, move to another in a few steps, and let go.
+  const drag = async (from: { x: number; y: number }, toX: number) => {
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move((from.x + toX) / 2, from.y, { steps: 4 });
+    await page.mouse.move(toX, from.y, { steps: 4 });
+    await page.mouse.up();
+  };
+  const middle = async (index: number, part = ".tl-clips>button") => {
+    const box = (await (
+      part.startsWith(".tl-trim")
+        ? sections.nth(index).locator(part)
+        : sections.nth(index)
+    ).boundingBox())!;
+    return { x: box.x + box.width / 2, y: box.y + box.height / 2, box };
+  };
+  // A click only selects.
+  await sections.nth(0).click();
+  await expect(heading).toHaveText("Section 1 of 2");
+  await expect(trimStart).toHaveValue("0");
+  const splitAt = Number(await trimEnd.inputValue());
+  expect(splitAt).toBeGreaterThan(2);
+  await saved();
+  // Drag the end of the first section a third of the way back: it gets shorter.
+  const first = await middle(0);
+  const endHandle = await middle(0, ".tl-trim.end");
+  expect(endHandle.box.width).toBeGreaterThanOrEqual(12);
+  await sections.nth(0).locator(".tl-trim.end").hover();
+  await page.locator(".stage").screenshot({
+    path: "test-results/timeline-sections.png",
+  });
+  await drag(endHandle, endHandle.x - first.box.width / 3);
+  await expect
+    .poll(async () => Number(await trimEnd.inputValue()))
+    .toBeLessThan(splitAt - 0.5);
+  await expect(sections).toHaveCount(2);
+  await expect(sections.nth(0)).not.toHaveAccessibleName(
+    `Section 1, 0:0${Math.floor(splitAt)} long`,
+  );
+  await expect(trimStart).toHaveValue("0");
+  await undo();
+  await expect(trimEnd).toHaveValue(String(splitAt));
+  await expect(sections).toHaveCount(2);
+  // The start handle trims the other end.
+  const startHandle = await middle(0, ".tl-trim:not(.end)");
+  await drag(startHandle, startHandle.x + first.box.width / 3);
+  await expect
+    .poll(async () => Number(await trimStart.inputValue()))
+    .toBeGreaterThan(0.5);
+  await expect(trimEnd).toHaveValue(String(splitAt));
+  await undo();
+  await expect(trimStart).toHaveValue("0");
+  // Drag the first section past the middle of the second: they change places.
+  const second = await middle(1);
+  await drag(await middle(0), second.x + 30);
+  await expect(heading).toHaveText("Section 2 of 2");
+  await expect(trimStart).toHaveValue("0");
+  await expect(trimEnd).toHaveValue(String(splitAt));
+  await sections.nth(0).click();
+  await expect(heading).toHaveText("Section 1 of 2");
+  await expect(trimStart).toHaveValue(String(splitAt));
+  await undo();
+  await sections.nth(0).click();
+  await expect(trimStart).toHaveValue("0");
+  await expect(trimEnd).toHaveValue(String(splitAt));
+  // The same from the keyboard: Shift and an arrow trims the end by half a second,
+  // an arrow alone moves the section, and S splits where the video is paused.
+  await saved();
+  await sections.nth(0).focus();
+  await page.keyboard.press("Shift+ArrowLeft");
+  await expect(trimEnd).toHaveValue(String(splitAt - 0.5));
+  await undo();
+  await expect(trimEnd).toHaveValue(String(splitAt));
+  await sections.nth(0).focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(heading).toHaveText("Section 2 of 2");
+  await expect(sections.nth(1)).toBeFocused();
+  await expect(trimStart).toHaveValue("0");
+  await page.keyboard.press("ArrowLeft");
+  await expect(heading).toHaveText("Section 1 of 2");
+  await expect(sections.nth(0)).toBeFocused();
+  await expect(trimStart).toHaveValue("0");
+  await page.getByLabel("Position in video").fill("1");
+  await sections.nth(0).focus();
+  await page.keyboard.press("s");
+  await expect(sections).toHaveCount(3);
+  await undo();
+  await expect(sections).toHaveCount(2);
   const tab = page.locator(".studio-tabs");
   await tab.getByRole("tab", { name: /Transcript/ }).click();
   await expect(

@@ -121,7 +121,9 @@ export function autoZoom(
 }
 
 // FFmpeg zoompan expressions for a set of zooms on a segment's local timeline.
-// Each zoom eases in and out (smoothstep); the centre follows whichever is active.
+// Each zoom eases in and out (smoothstep) around its point of focus, which stays
+// where it is in the picture while everything else grows away from it. That is
+// how the editor's preview shows a zoom, so the two agree.
 export function zoomFilter(zooms, width, height) {
   if (!zooms.length) return null;
   const weight = (z) => {
@@ -135,8 +137,8 @@ export function zoomFilter(zooms, width, height) {
     `if(gt(${total},0.0001),(${sum((z) => `${z[axis].toFixed(4)}*${weight(z)}`)})/(${total}),0.5)`;
   return (
     `zoompan=z='${zoom}'` +
-    `:x='clip(${centre("x")}*iw-iw/zoom/2,0,iw-iw/zoom)'` +
-    `:y='clip(${centre("y")}*ih-ih/zoom/2,0,ih-ih/zoom)'` +
+    `:x='clip(${centre("x")}*(iw-iw/zoom),0,iw-iw/zoom)'` +
+    `:y='clip(${centre("y")}*(ih-ih/zoom),0,ih-ih/zoom)'` +
     `:d=1:s=${width}x${height}:fps=30`
   );
 }

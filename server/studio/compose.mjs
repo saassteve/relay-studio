@@ -104,6 +104,34 @@ export function planLayout(layout, preset, screenAspect, hasCamera) {
   };
 }
 
+// Where an effect placed on the frame sits on the screen picture, as fractions
+// of the picture. Null when its middle is not over the picture at all.
+export function onScreen(effect, screen, W, H) {
+  if (!screen) return null;
+  const left = effect.x * W,
+    top = effect.y * H,
+    wide = effect.w * W,
+    high = effect.h * H,
+    cx = left + wide / 2,
+    cy = top + high / 2;
+  if (
+    cx < screen.x ||
+    cx > screen.x + screen.w ||
+    cy < screen.y ||
+    cy > screen.y + screen.h
+  )
+    return null;
+  const within = (n) => Math.max(0, Math.min(1, n)),
+    x = within((left - screen.x) / screen.w),
+    y = within((top - screen.y) / screen.h);
+  return {
+    x,
+    y,
+    w: within((left + wide - screen.x) / screen.w) - x,
+    h: within((top + high - screen.y) / screen.h) - y,
+  };
+}
+
 // Anti-aliased rounded rectangle of size w×h centred in the image, as luma.
 const roundedRect = (w, h, r) =>
   `255*clip(${r}-hypot(max(abs(X-(W-1)/2)-(${w / 2 - r}),0),max(abs(Y-(H-1)/2)-(${h / 2 - r}),0))+0.5,0,1)`;

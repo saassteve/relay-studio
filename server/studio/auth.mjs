@@ -1,4 +1,5 @@
 import {
+  createHash,
   randomBytes,
   randomUUID,
   scryptSync,
@@ -20,10 +21,14 @@ export function passwordMatches(value, stored) {
     return false;
   }
 }
-export function createAuth({ app, db, password, rateLimit }) {
+export function createAuth({ app, db, password, rateLimit, limiter }) {
   const decoy = passwordHash("relay-decoy-password");
   const publicMember = (m) =>
     m && { id: m.id, email: m.email, name: m.name, role: m.role };
+  const appliedPassword = () =>
+    db
+      .prepare("SELECT value FROM settings WHERE key='owner_password_from'")
+      .get()?.value;
   let root = db.prepare("SELECT * FROM members WHERE id='owner'").get();
   if (!root) {
     db.prepare("INSERT INTO members VALUES(?,?,?,?,?,?)").run(
@@ -35,17 +40,31 @@ export function createAuth({ app, db, password, rateLimit }) {
       new Date().toISOString(),
     );
     root = db.prepare("SELECT * FROM members WHERE id='owner'").get();
-  } else if (password && !passwordMatches(password, root.password)) {
-    db.prepare("UPDATE members SET password=? WHERE id='owner'").run(
-      passwordHash(password),
-    );
-    // A new ADMIN_PASSWORD signs the owner out wherever the old one was used.
-    db.prepare("DELETE FROM member_sessions WHERE member_id='owner'").run();
+  } else if (password) {
+    // ADMIN_PASSWORD is where the owner's password starts, and how it is set
+    // again if it is forgotten: a new value there replaces whatever the owner
+    // had. The same value as last time leaves a password the owner has since
+    // chosen in Relay alone. Before Relay kept track, the two always matched.
+    const applied = appliedPassword();
+    if (!passwordMatches(password, applied || root.password)) {
+      db.prepare("UPDATE members SET password=? WHERE id='owner'").run(
+        passwordHash(password),
+      );
+      // A new ADMIN_PASSWORD signs the owner out wherever the old one was used.
+      db.prepare("DELETE FROM member_sessions WHERE member_id='owner'").run();
+    }
   }
+  // Which ADMIN_PASSWORD has been applied is remembered as a hash, like any
+  // other password.
+  if (password && !passwordMatches(password, appliedPassword() || ""))
+    db.prepare(
+      "INSERT INTO settings VALUES('owner_password_from',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+    ).run(passwordHash(password));
   const attach = (req, res, next) => {
     const key = req.headers.cookie?.match(
       /(?:^|;\s*)relay_session=([a-f0-9]{64})(?:;|$)/,
     )?.[1];
+    req.sessionKey = key;
     req.user = key
       ? db
           .prepare(
@@ -70,7 +89,7 @@ export function createAuth({ app, db, password, rateLimit }) {
         (req.method === "POST" &&
           /^\/api\/notifications\/[^/]+\/read$/.test(req.path)) ||
         (req.method === "PUT" &&
-          /^\/api\/(preferences|profile)$/.test(req.path))
+          /^\/api\/(preferences|profile|password)$/.test(req.path))
       )
     )
       return res
@@ -185,6 +204,100 @@ export function createAuth({ app, db, password, rateLimit }) {
       ),
     });
   });
+  // Every password a member chooses is held to the same rule.
+  const chosen = (value) => {
+    const text = String(value || "");
+    if (text.length < 12)
+      throw problem(400, "Use a password of at least 12 characters.");
+    return text;
+  };
+  const changeable = () => {
+    if (!password) throw problem(400, "This workspace doesn’t use passwords.");
+  };
+  // Stores a new password and signs the member out wherever the old one was
+  // used, apart from `keep`, the session making the change. Reset links that
+  // were waiting stop working too.
+  const setPassword = (id, value, keep = "") => {
+    const hash = passwordHash(value);
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.prepare("UPDATE members SET password=? WHERE id=?").run(hash, id);
+      db.prepare("DELETE FROM member_sessions WHERE member_id=? AND id!=?").run(
+        id,
+        keep,
+      );
+      db.prepare("DELETE FROM password_resets WHERE member_id=?").run(id);
+      db.exec("COMMIT");
+    } catch (e) {
+      db.exec("ROLLBACK");
+      throw e;
+    }
+  };
+  app.put("/api/password", rateLimit, owner, (req, res) => {
+    changeable();
+    if (!passwordMatches(String(req.body.current || ""), req.user.password))
+      throw problem(403, "That isn’t your current password.");
+    setPassword(req.user.id, chosen(req.body.password), req.sessionKey || "");
+    res.json({ ok: true });
+  });
+  // A member who forgot their password gets a link from the owner, since a
+  // self-hosted server has no email to send one. Only a hash of the link is
+  // kept, and the link is looked up by that hash, so neither a copy of the
+  // database nor the time a lookup takes gives a working link away.
+  const digest = (token) =>
+    createHash("sha256").update(String(token)).digest("hex");
+  app.post("/api/team/:id/password-reset", admin, (req, res) => {
+    const member = db
+      .prepare("SELECT id FROM members WHERE id=?")
+      .get(req.params.id);
+    if (!member) throw problem(404, "That person isn’t in this workspace.");
+    changeable();
+    // Only the owner makes reset links, and an owner who can sign in to make
+    // one can change their password in Settings. One who can't sets a new
+    // ADMIN_PASSWORD on the server, which needs no link.
+    if (member.id === "owner")
+      throw problem(
+        400,
+        "Change your own password in Settings. If you have forgotten it, set a new ADMIN_PASSWORD on the server and restart Relay.",
+      );
+    const token = randomBytes(32).toString("base64url"),
+      expires = Date.now() + 86400000;
+    // A new link replaces the one sent before. Expired ones are cleared as well.
+    db.prepare(
+      "DELETE FROM password_resets WHERE member_id=? OR expires<?",
+    ).run(member.id, Date.now());
+    db.prepare("INSERT INTO password_resets VALUES(?,?,?)").run(
+      digest(token),
+      member.id,
+      expires,
+    );
+    res.status(201).json({ token, expires });
+  });
+  // Guesses from one address are counted together, whichever link they name.
+  const resetLimit = limiter(10, undefined, (req) => req.route.path);
+  const resetFor = (token) => {
+    const member = db
+      .prepare(
+        "SELECT m.id,m.name,m.email FROM password_resets r JOIN members m ON m.id=r.member_id WHERE r.token_hash=? AND r.expires>?",
+      )
+      .get(digest(token), Date.now());
+    // One answer for a link that never existed, has expired or was used.
+    if (!member)
+      throw problem(
+        404,
+        "This reset link has expired or was already used. Ask the workspace owner for a new one.",
+      );
+    return member;
+  };
+  app.get("/api/password-resets/:token", resetLimit, (req, res) => {
+    const member = resetFor(req.params.token);
+    res.json({ name: member.name, email: member.email });
+  });
+  app.post("/api/password-resets/:token", resetLimit, (req, res) => {
+    const member = resetFor(req.params.token);
+    setPassword(member.id, chosen(req.body.password));
+    res.json({ ok: true });
+  });
   // Per-member studio preferences live with the library, not in browser storage,
   // so onboarding and recorder defaults survive origin or port changes.
   const preferenceRules = {
@@ -234,6 +347,11 @@ export function createAuth({ app, db, password, rateLimit }) {
   app.get("/api/team", owner, (req, res) =>
     res.json({
       member: publicMember(req.user),
+      // How this member's password is looked after: there is none ("none", a
+      // workspace without passwords), it is theirs to change and the owner can
+      // reset it ("own"), or it is theirs to change and the server's settings
+      // reset it ("server", the owner).
+      password: !password ? "none" : req.user.id === "owner" ? "server" : "own",
       members: db
         .prepare(
           "SELECT id,email,name,role,created FROM members ORDER BY created",
@@ -243,7 +361,7 @@ export function createAuth({ app, db, password, rateLimit }) {
         req.user.role === "owner"
           ? db
               .prepare(
-                "SELECT token,email,name,role,expires FROM invitations WHERE accepted=0 AND expires>?",
+                "SELECT token AS id,email,name,role,expires FROM invitations WHERE accepted=0 AND expires>?",
               )
               .all(Date.now())
           : [],
@@ -267,8 +385,10 @@ export function createAuth({ app, db, password, rateLimit }) {
     db.prepare("DELETE FROM invitations WHERE email=? AND accepted=0").run(
       email,
     );
+    // Only a hash of the link is kept, as for a password reset: the link is
+    // shown to the owner once, here, and a copy of the database gives none away.
     db.prepare("INSERT INTO invitations VALUES(?,?,?,?,?,0)").run(
-      token,
+      digest(token),
       email,
       name,
       role,
@@ -276,8 +396,9 @@ export function createAuth({ app, db, password, rateLimit }) {
     );
     res.status(201).json({ token, email, name, role, expires });
   });
-  app.delete("/api/team/invitations/:token", admin, (req, res) => {
-    db.prepare("DELETE FROM invitations WHERE token=?").run(req.params.token);
+  // Revoked by the name the owner's list knows it by, which is not the link.
+  app.delete("/api/team/invitations/:id", admin, (req, res) => {
+    db.prepare("DELETE FROM invitations WHERE token=?").run(req.params.id);
     res.json({ ok: true });
   });
   const invitation = (token) => {
@@ -285,20 +406,20 @@ export function createAuth({ app, db, password, rateLimit }) {
       .prepare(
         "SELECT * FROM invitations WHERE token=? AND expires>? AND accepted=0",
       )
-      .get(token, Date.now());
+      .get(digest(token), Date.now());
     if (!row)
       throw problem(404, "This invitation has expired or was already used.");
     return row;
   };
-  app.get("/api/invitations/:token", (req, res) => {
+  // Guesses from one address are counted together, whichever link they name.
+  const inviteLimit = limiter(10, undefined, (req) => req.route.path);
+  app.get("/api/invitations/:token", inviteLimit, (req, res) => {
     const row = invitation(req.params.token);
     res.json({ email: row.email, name: row.name, role: row.role });
   });
-  app.post("/api/invitations/:token/accept", rateLimit, (req, res) => {
+  app.post("/api/invitations/:token/accept", inviteLimit, (req, res) => {
     const row = invitation(req.params.token),
-      value = String(req.body.password || "");
-    if (value.length < 12)
-      throw problem(400, "Use a password of at least 12 characters.");
+      value = chosen(req.body.password);
     const id = randomUUID();
     db.exec("BEGIN IMMEDIATE");
     try {

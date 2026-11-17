@@ -15,6 +15,13 @@
 # Other teams: set RELAY_TEAM_ID to your team ID, and RELAY_NOTARY_PROFILE if you
 # saved the credentials under another name.
 #
+# Updates: the official build keeps itself up to date from Relay's GitHub releases.
+# It reads latest-mac.yml there, which this script writes from the finished ZIPs,
+# and installs the ZIP for its chip. Attach every file listed at the end to the
+# release before publishing it. A build signed by another team cannot install the
+# official updates, so it gets no update feed unless RELAY_UPDATE_REPO
+# (owner/repository on GitHub) or RELAY_UPDATE_URL names its own.
+#
 # A release is built from committed code. Set RELAY_RELEASE_DIRTY=1 to build with
 # uncommitted changes anyway.
 set -eu
@@ -25,14 +32,23 @@ cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 VERSION="$(node -p "require('./package.json').version")"
 BUNDLE_ID="org.relayvideo.studio"
+OFFICIAL_TEAM="KDN7P432GJ"
+# Read by electron-builder.config.cjs, which writes the feed into the app.
+if [ "$TEAM" = "$OFFICIAL_TEAM" ] && [ -z "${RELAY_UPDATE_URL:-}" ]; then
+  export RELAY_UPDATE_REPO="${RELAY_UPDATE_REPO:-saassteve/relay-studio}"
+fi
+FEED="${RELAY_UPDATE_URL:-${RELAY_UPDATE_REPO:-}}"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/relay-release.XXXXXX")"
 # The download being packaged, until it has passed its checks.
 UNVERIFIED=""
+# Set while latest-mac.yml is being written and checked.
+MANIFEST_UNVERIFIED=""
 cleanup() {
   rm -rf "$WORK"
   # A file that failed, or never reached, its checks must not be left in release/
   # looking finished.
   [ -z "$UNVERIFIED" ] || rm -f "$UNVERIFIED.dmg" "$UNVERIFIED.zip"
+  [ -z "$MANIFEST_UNVERIFIED" ] || rm -f release/latest-mac.yml
 }
 trap cleanup EXIT
 
@@ -51,6 +67,15 @@ echo "→ Building"
 npm run build
 rm -rf release
 npx electron-builder --config electron-builder.config.cjs --mac dir --arm64 --x64 --publish never
+
+# Where this build looks for its updates. It has to be inside the app before the
+# app is signed.
+has_feed() {
+  [ -z "$FEED" ] || [ -s "$1/Contents/Resources/app-update.yml" ]
+}
+for DIR in mac-arm64 mac; do
+  has_feed "release/$DIR/Relay.app" || fail "release/$DIR/Relay.app was packed without its update feed (app-update.yml)."
+done
 
 cat >"$WORK/export.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -127,10 +152,22 @@ EOF
   rm -rf "$APP"
   ditto "$SIGNED" "$APP"
   spctl --assess --type execute --verbose=2 "$APP"
+  has_feed "$APP" || fail "The signed $ARCH app lost its update feed (app-update.yml)."
 
   echo "→ Packaging the $ARCH download"
   UNVERIFIED="release/Relay-mac-$ARCH"
   ditto -c -k --sequesterRsrc --keepParent "$APP" "release/Relay-mac-$ARCH.zip"
+  # An update installs the app from this ZIP, so it must unpack to the notarized
+  # app, signature intact.
+  UNZIPPED="$WORK/$ARCH/unzipped"
+  mkdir -p "$UNZIPPED"
+  ditto -x -k "release/Relay-mac-$ARCH.zip" "$UNZIPPED"
+  codesign --verify --deep --strict "$UNZIPPED/Relay.app" &&
+    xcrun stapler validate "$UNZIPPED/Relay.app" >/dev/null &&
+    spctl --assess --type execute "$UNZIPPED/Relay.app" &&
+    has_feed "$UNZIPPED/Relay.app" ||
+    fail "The app inside the $ARCH ZIP is not the notarized one."
+  rm -rf "$UNZIPPED"
   # The disk image is built around the finished app; nothing is signed again.
   CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --config electron-builder.config.cjs \
     --mac dmg "--$ARCH" --prepackaged "$APP" --publish never
@@ -153,4 +190,40 @@ sign_and_notarize mac-arm64 arm64 arm64
 sign_and_notarize mac x64 x86_64
 
 (cd release && shasum -a 256 Relay-mac-arm64.dmg Relay-mac-x64.dmg Relay-mac-arm64.zip Relay-mac-x64.zip >SHA256SUMS.txt)
-echo "✓ Signed, notarized and stapled. Files are in $ROOT/release."
+
+# What an installed copy reads to update itself, written from the finished ZIPs.
+echo "→ Writing latest-mac.yml"
+MANIFEST_UNVERIFIED=1
+node scripts/update-manifest.mjs write "$VERSION" release \
+  release/Relay-mac-arm64.zip release/Relay-mac-x64.zip ||
+  fail "Could not write latest-mac.yml."
+node scripts/update-manifest.mjs verify "$VERSION" release ||
+  fail "latest-mac.yml does not match the ZIPs."
+# The same check again without Relay's own script: each ZIP's SHA-512, in base64,
+# must be the one the file gives for it.
+grep -qx "version: $VERSION" release/latest-mac.yml ||
+  fail "latest-mac.yml is not for version $VERSION."
+for ARCH in arm64 x64; do
+  SUM="$(openssl dgst -sha512 -binary "release/Relay-mac-$ARCH.zip" | base64 | tr -d '\n')"
+  SIZE="$(wc -c <"release/Relay-mac-$ARCH.zip" | tr -d ' ')"
+  [ "${#SUM}" -eq 88 ] || fail "Could not hash release/Relay-mac-$ARCH.zip."
+  awk -v url="Relay-mac-$ARCH.zip" -v sum="$SUM" -v size="$SIZE" '
+    $1 == "-" && $2 == "url:" { name = $3 }
+    $1 == "path:" { name = "" }
+    name == url && $1 == "sha512:" && $2 == sum { hashed = 1 }
+    name == url && $1 == "size:" && $2 == size { sized = 1 }
+    END { exit !(hashed && sized) }
+  ' release/latest-mac.yml ||
+    fail "latest-mac.yml does not match release/Relay-mac-$ARCH.zip."
+done
+MANIFEST_UNVERIFIED=""
+
+echo "✓ Signed, notarized and stapled. Attach all of these to the GitHub release, from $ROOT/release:"
+printf '    %s\n' Relay-mac-arm64.dmg Relay-mac-x64.dmg Relay-mac-arm64.zip \
+  Relay-mac-x64.zip SHA256SUMS.txt latest-mac.yml
+if [ -n "$FEED" ]; then
+  echo "  Installed copies of Relay $VERSION and later update themselves from latest-mac.yml and"
+  echo "  the two ZIPs (feed: $FEED). Publish the release only once every file is attached."
+else
+  echo "  This build has no update feed, so it will not update itself."
+fi

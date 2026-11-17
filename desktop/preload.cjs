@@ -7,7 +7,17 @@ contextBridge.exposeInMainWorld("relayDesktop", {
   permissionStatus: () => ipcRenderer.invoke("relay:permissions"),
   captureState: (state) => ipcRenderer.send("relay:capture-state", state),
   notify: (message) => ipcRenderer.send("relay:notify", message),
+  setTheme: (theme) => ipcRenderer.invoke("relay:theme", theme),
   checkForUpdates: () => ipcRenderer.invoke("relay:updates"),
+  updateState: () => ipcRenderer.invoke("relay:update-state"),
+  setAutomaticUpdates: (on) =>
+    ipcRenderer.invoke("relay:update-automatic", on === true),
+  restartToUpdate: () => ipcRenderer.invoke("relay:update-restart"),
+  onUpdateState: (fn) => {
+    const listener = (_e, state) => fn(state);
+    ipcRenderer.on("relay:update-state", listener);
+    return () => ipcRenderer.removeListener("relay:update-state", listener);
+  },
   info: () => ipcRenderer.invoke("relay:info"),
   requestPermission: (kind) =>
     ipcRenderer.invoke("relay:permission-request", kind),

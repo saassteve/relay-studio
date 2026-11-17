@@ -5,18 +5,22 @@ import {
   writeFileSync,
   readFileSync,
   rmSync,
+  statSync,
+  readdirSync,
 } from "node:fs";
 import path from "node:path";
 import { createJobs } from "./jobs.mjs";
 import { createRenderer, engine, probe } from "./render.mjs";
 import { registerRecordings } from "./recordings.mjs";
 import { registerSharing } from "./sharing.mjs";
+import { registerPreview } from "./preview.mjs";
 import { createTranscription } from "./transcription.mjs";
 import { parseJSON, problem, mediaHeaders, sendMedia } from "./schema.mjs";
 import {
   getProject,
   validateProject,
   publishedProject,
+  settleBlurs,
   outputWords,
   transcriptWords,
   captions,
@@ -32,12 +36,47 @@ import { registerIntegrations } from "./integrations.mjs";
 const packageVersion = JSON.parse(
   readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
 ).version;
+// The sizes a video is streamed in, smallest first. Nothing is made taller than
+// the video itself. From 1440p up it also gets one rung at its own height (4K at
+// most), with a bitrate that grows with it: 8000k at 1440p, 14000k at 2160p.
+// A rung never gets more data than the video itself uses (`sourceRate`, in
+// kilobits a second): a quiet screen recording would only grow. Smaller rungs
+// that would then cost as much as a larger one are left out.
+export function streamLadder(sourceHeight, sourceRate = 0) {
+  const height = Math.max(2, Math.floor((sourceHeight || 360) / 2) * 2);
+  const rungs = [
+    { height: 360, rate: 650, bandwidth: 850000 },
+    { height: 720, rate: 1800, bandwidth: 2100000 },
+    { height: 1080, rate: 4500, bandwidth: 5100000 },
+  ].filter((r) => r.height <= height);
+  if (height >= 1440) {
+    const top = Math.min(height, 2160),
+      rate = Math.round(8000 + ((top - 1440) / 720) * 6000);
+    rungs.push({
+      height: top,
+      rate,
+      bandwidth: Math.round((rate + 96) * 1.1) * 1000,
+    });
+  }
+  // A video smaller than the smallest rung is streamed at its own size.
+  if (!rungs.length) rungs.push({ height, rate: 650, bandwidth: 850000 });
+  if (!(sourceRate > 0)) return rungs;
+  const most = Math.max(300, Math.round(sourceRate * 1.1));
+  return rungs
+    .map((r) =>
+      r.rate <= most
+        ? r
+        : { ...r, rate: most, bandwidth: Math.round((most + 96) * 1.1) * 1000 },
+    )
+    .filter((r, i, all) => i === all.length - 1 || r.rate < all[i + 1].rate);
+}
 export function registerStudio(context) {
   const { app, db, dataDir, owner, admin, find, serialize } = context,
     jobs = createJobs(db),
     renderer = createRenderer(context),
     transcription = createTranscription({ ...context, renderer });
   const sharing = registerSharing(context);
+  registerPreview({ ...context, sharing });
   const sourceFind = (id) => {
     const v = find(id),
       assets = renderer.assetsFor(v),
@@ -47,6 +86,47 @@ export function registerStudio(context) {
         assets.find((a) => a.role === "camera");
     return { ...v, duration: primary?.duration || v.duration };
   };
+  // Once, for a library from before blurs belonged to the screen picture: see
+  // settleBlurs. Every copy of a project is brought over, so that undoing an
+  // edit or going back to an earlier version never brings the old reading back.
+  const shapeOf = (sourceId) => {
+    try {
+      const assets = renderer.assetsFor(find(sourceId)),
+        role = (name) => assets.find((a) => a.role === name),
+        shape = parseJSON(
+          (role("screen") || role("primary") || role("camera"))?.info,
+          {},
+        );
+      return shape.width > 0 && shape.height > 0
+        ? {
+            aspect: shape.width / shape.height,
+            hasCamera: Boolean(role("screen") && role("camera")),
+          }
+        : null;
+    } catch {
+      return null;
+    }
+  };
+  for (const [table, column, key] of [
+    ["videos", "project", "id"],
+    ["videos", "published_project", "id"],
+    ["project_history", "project", "rowid"],
+    ["versions", "project", "id"],
+  ])
+    for (const row of db
+      .prepare(
+        `SELECT ${key} AS key,${column} AS project FROM ${table} WHERE ${column} LIKE '%"blur"%' AND ${column} NOT LIKE '%"placing":2%'`,
+      )
+      .all()) {
+      const project = parseJSON(row.project, null);
+      if (!project?.segments || !project.layout) continue;
+      const settled = settleBlurs(project, shapeOf);
+      if (settled !== project)
+        db.prepare(`UPDATE ${table} SET ${column}=? WHERE ${key}=?`).run(
+          JSON.stringify(settled),
+          row.key,
+        );
+    }
   const projectResponse = (v) => ({
     project: getProject(v),
     // What the shared video currently shows, to tell when edits are unpublished.
@@ -367,18 +447,12 @@ export function registerStudio(context) {
     if (existsSync(path.join(root, "master.m3u8")))
       return { videoId, ready: true };
     mkdirSync(root, { recursive: true });
-    const variants = [
-      { height: 360, rate: "650k", bandwidth: 850000 },
-      { height: 720, rate: "1800k", bandwidth: 2100000 },
-    ];
-    const info = await probe(path.join(dataDir, "media", v.filename));
-    const selected = variants.filter((v) => v.height <= info.height);
-    if (!selected.length)
-      selected.push({
-        height: Math.max(180, Math.floor((info.height || 360) / 2) * 2),
-        rate: "650k",
-        bandwidth: 850000,
-      });
+    const file = path.join(dataDir, "media", v.filename),
+      info = await probe(file);
+    const selected = streamLadder(
+      info.height,
+      info.duration ? (statSync(file).size * 8) / info.duration / 1000 : 0,
+    );
     const master = ["#EXTM3U", "#EXT-X-VERSION:3"];
     for (let i = 0; i < selected.length; i++) {
       const variant = selected[i],
@@ -394,7 +468,7 @@ export function registerStudio(context) {
         "-preset",
         "veryfast",
         "-b:v",
-        variant.rate,
+        `${variant.rate}k`,
         "-c:a",
         "aac",
         "-b:a",
@@ -415,13 +489,23 @@ export function registerStudio(context) {
         path.join(root, `${name}_%05d.ts`),
         path.join(root, `${name}.m3u8`),
       ]);
+      // The width FFmpeg's `scale=-2` arrives at. A player can use the size to
+      // pick a rung that suits the screen it is playing on.
+      const width =
+        Math.round((info.width * variant.height) / info.height / 2) * 2;
       master.push(
-        `#EXT-X-STREAM-INF:BANDWIDTH=${variant.bandwidth}`,
+        `#EXT-X-STREAM-INF:BANDWIDTH=${variant.bandwidth}${width > 0 ? `,RESOLUTION=${width}x${variant.height}` : ""}`,
         `${name}.m3u8`,
       );
       progress(((i + 1) / selected.length) * 95);
     }
     writeFileSync(path.join(root, "master.m3u8"), master.join("\n") + "\n");
+    // Streams made for earlier versions of the video are no longer played. The
+    // one before this is kept a while longer, for anyone still watching it.
+    const made = path.dirname(root);
+    for (const name of readdirSync(made))
+      if (/^\d+$/.test(name) && Number(name) < Number(v.revision) - 1)
+        rmSync(path.join(made, name), { recursive: true, force: true });
     return { videoId, ready: true };
   });
   const recordings = registerRecordings({

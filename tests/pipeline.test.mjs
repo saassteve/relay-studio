@@ -1145,3 +1145,277 @@ test("text in an overlay is drawn as typed, where and when it was placed", async
   const tall = capitals.bottom - capitals.top + 1;
   assert.ok(Math.abs(tall - size * 0.7) <= 2, `${tall} pixels high`);
 });
+
+// A 640 by 360 recording of a white page. Inside `block` ([x, y, w, h]) it has
+// upright stripes, each half of `period` pixels wide: the fine detail a blur
+// or a careless resize would wipe out.
+const striped = (file, [x, y, w, h], period = 4, seconds = 2) =>
+  make(
+    file,
+    "-f",
+    "lavfi",
+    "-i",
+    `color=white:s=640x360:r=30:d=${seconds},format=gray,geq=lum='if(between(X,${x},${x + w - 1})*between(Y,${y},${y + h - 1})*lt(mod(X,${period}),${period / 2}),0,255)'`,
+    "-c:v",
+    "libvpx",
+    "-crf",
+    "4",
+    "-b:v",
+    "4M",
+    file,
+  );
+// How many pixels of a frame sit on a hard edge between dark and light.
+function edges(file, frame, width = 640, height = 360) {
+  const { grey } = ink(file, frame, [0, 0, width, height]);
+  let count = 0;
+  for (let i = 0; i + 2 < grey.length; i++)
+    if (i % width < width - 2 && Math.abs(grey[i] - grey[i + 2]) > 110) count++;
+  return count;
+}
+const plain = (project, more = {}) => {
+  Object.assign(project.layout, {
+    width: 640,
+    height: 360,
+    preset: "screen",
+    background: "#000000",
+    ...more,
+  });
+  project.layout.audio.normalize = false;
+  return project;
+};
+const zoomOn = (start, end, x, y, scale = 2) => ({
+  ...label("", start, end, { x, y }),
+  id: `zoom-${start}`,
+  type: "zoom",
+  scale,
+});
+
+test("a zoom shows the detail that was recorded, not an enlargement of a smaller picture", async (t) => {
+  const h = await harness(t);
+  const id = await h.record(
+    {
+      screen: striped(path.join(h.dir, "s.webm"), [0, 0, 640, 360], 2),
+      microphone: sound(
+        path.join(h.dir, "m.webm"),
+        "sine=frequency=440:sample_rate=48000:duration=2",
+      ),
+    },
+    2,
+  );
+  // The video is half the size of the recording, so stripes a pixel wide are
+  // too fine for it until a zoom shows them at the size they were recorded.
+  const project = plain(await h.project(id), { width: 320, height: 180 });
+  project.overlays = [zoomOn(0.2, 1.8, 0.5, 0.5)];
+  const done = await h.render(id, project);
+  assert.equal(done.status, "complete", done.error);
+  const { grey } = ink(h.file(id), 30, [0, 80, 320, 20]);
+  const crisp = grey.filter((v) => v < 70 || v > 185).length / grey.length;
+  assert.ok(crisp > 0.6, `${Math.round(crisp * 100)}% of it is black or white`);
+});
+
+test("a blur stays on what it hides while the picture zooms", async (t) => {
+  const h = await harness(t);
+  const id = await h.record(
+    {
+      screen: striped(path.join(h.dir, "s.webm"), [400, 100, 80, 40]),
+      microphone: sound(
+        path.join(h.dir, "m.webm"),
+        "sine=frequency=440:sample_rate=48000:duration=2",
+      ),
+    },
+    2,
+  );
+  const project = plain(await h.project(id));
+  const zoom = zoomOn(0.5, 1.7, 0.69, 0.33);
+  // Without a blur the stripes are there to be seen, zoomed or not.
+  project.overlays = [zoom];
+  assert.equal((await h.render(id, project)).status, "complete");
+  for (const frame of [5, 33])
+    assert.ok(edges(h.file(id), frame) > 500, `frame ${frame} shows them`);
+  // With one over them, they never show: not before the zoom, not while the
+  // picture is moving, and not once it has settled.
+  project.overlays = [
+    zoom,
+    {
+      ...label("", 0, 2, { x: 0.6, y: 0.25, w: 0.18, h: 0.17 }),
+      type: "blur",
+    },
+  ];
+  assert.equal((await h.render(id, project)).status, "complete");
+  for (const frame of [5, 16, 18, 20, 22, 24, 33, 46, 48, 50, 52, 58])
+    assert.ok(
+      edges(h.file(id), frame) < 20,
+      `frame ${frame} shows ${edges(h.file(id), frame)} pixels of stripe`,
+    );
+});
+
+test("a change of layout moves the picture across; it is never shown twice", async (t) => {
+  const h = await harness(t);
+  const id = await h.record(
+    {
+      screen: colours(path.join(h.dir, "s.webm"), [["red", 2]]),
+      camera: colours(path.join(h.dir, "c.webm"), [["blue", 2]]),
+      microphone: sound(
+        path.join(h.dir, "m.webm"),
+        "sine=frequency=440:sample_rate=48000:duration=2",
+      ),
+    },
+    2,
+  );
+  const project = plain(await h.project(id));
+  project.scenes = [{ id: "side", start: 1, end: 2, preset: "side" }];
+  const done = await h.render(id, project);
+  assert.equal(done.status, "complete", done.error);
+  assert.equal(measure(h.file(id)).frames, 60);
+  const red = (frame) =>
+    execFileSync(
+      ffmpeg,
+      [
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        h.file(id),
+        "-vf",
+        `select=eq(n\\,${frame}),format=gbrp,extractplanes=r`,
+        "-frames:v",
+        "1",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "gray",
+        "pipe:1",
+      ],
+      { maxBuffer: 8 * 1024 * 1024 },
+    );
+  const share = (frame, from, to) => {
+    const plane = red(frame);
+    return plane.filter((v) => v >= from && v <= to).length / plane.length;
+  };
+  // Red fills the frame before the change and a smaller part of it after.
+  assert.ok(share(20, 200, 255) > 0.95);
+  const settled = share(55, 200, 255);
+  assert.ok(settled > 0.3 && settled < 0.8, `${settled} of it is red`);
+  // Partway through, the screen is a solid picture between the two sizes. A
+  // dissolve would leave the frame around it half red.
+  for (const frame of [33, 36, 39]) {
+    const solid = share(frame, 200, 255),
+      faint = share(frame, 60, 190);
+    assert.ok(solid > settled && solid < 0.95, `frame ${frame}: ${solid} red`);
+    assert.ok(faint < 0.04, `frame ${frame}: ${faint} of it is half red`);
+  }
+});
+
+test("filler sounds are found, and words that only look like them are left alone", async (t) => {
+  const h = await harness(t);
+  const id = await h.record(
+    {
+      screen: colours(path.join(h.dir, "s.webm"), [["black", 2]]),
+      microphone: sound(
+        path.join(h.dir, "m.webm"),
+        "sine=frequency=440:sample_rate=48000:duration=2",
+      ),
+    },
+    2,
+  );
+  const said = [
+    "Um,",
+    "her",
+    "er",
+    "Hmm.",
+    "a",
+    "mm-hmm",
+    "uh-huh",
+    "error",
+    "uh",
+  ];
+  h.db
+    .prepare("UPDATE videos SET transcript=? WHERE id=?")
+    .run(
+      JSON.stringify(
+        said.map((text, i) => ({ text, start: i * 0.2, end: i * 0.2 + 0.15 })),
+      ),
+      id,
+    );
+  const found = (await h.api(`/api/videos/${id}/suggestions`, {})).body
+    .filter((s) => s.kind === "filler")
+    .map((s) => s.text);
+  assert.deepEqual(found, ["Um,", "er", "Hmm.", "mm-hmm", "uh"]);
+});
+
+test("streams made for earlier versions of a video are cleared away", async (t) => {
+  const h = await harness(t);
+  const id = await h.record(
+    {
+      screen: colours(path.join(h.dir, "s.webm"), [["red", 1]]),
+      microphone: sound(
+        path.join(h.dir, "m.webm"),
+        "sine=frequency=440:sample_rate=48000:duration=1",
+      ),
+    },
+    1,
+  );
+  const made = () =>
+    readdirSync(path.join(h.dir, "media", "hls", id))
+      .map(Number)
+      .sort((a, b) => a - b);
+  const stream = async () => {
+    const done = await h.job(
+      (await h.api(`/api/videos/${id}/stream`, {})).body,
+    );
+    assert.equal(done.status, "complete", done.error);
+    return h.db.prepare("SELECT revision FROM videos WHERE id=?").get(id)
+      .revision;
+  };
+  const first = await stream();
+  assert.deepEqual(made(), [first]);
+  // Each update is a new version, with a stream of its own. The one before the
+  // newest stays for anyone still watching it; older ones go.
+  const project = await h.project(id);
+  for (let i = 0; i < 2; i++) {
+    project.layout.padding = 10 + i * 10;
+    assert.equal((await h.render(id, project)).status, "complete");
+    await stream();
+  }
+  assert.deepEqual(made(), [first + 1, first + 2]);
+});
+
+test("a library from an earlier version has its blurs moved onto the picture when Relay starts", async (t) => {
+  const h = await harness(t);
+  const id = await h.record(
+    {
+      screen: colours(path.join(h.dir, "s.webm"), [["red", 2]]),
+      microphone: sound(
+        path.join(h.dir, "m.webm"),
+        "sine=frequency=440:sample_rate=48000:duration=2",
+      ),
+    },
+    2,
+  );
+  // As an earlier version saved it: a blur put on the frame while the preview
+  // showed the middle of the picture at twice its size.
+  const project = plain(await h.project(id));
+  project.overlays = [
+    zoomOn(0.2, 1.8, 0.5, 0.5),
+    {
+      ...label("", 0.5, 1.5, { x: 0.5, y: 0.5, w: 0.2, h: 0.2 }),
+      type: "blur",
+    },
+  ];
+  delete project.placing;
+  const stored = () =>
+    JSON.parse(
+      h.db.prepare("SELECT project FROM videos WHERE id=?").get(id).project,
+    );
+  h.db
+    .prepare("UPDATE videos SET project=? WHERE id=?")
+    .run(JSON.stringify(project), id);
+  createApp({ dataDir: h.dir }).close();
+  const blur = stored().overlays[1];
+  assert.equal(stored().placing, 2);
+  for (const [key, value] of Object.entries({ x: 0.5, y: 0.5, w: 0.1, h: 0.1 }))
+    assert.ok(Math.abs(blur[key] - value) < 1e-6, `${key} is ${blur[key]}`);
+  // Starting again changes nothing more.
+  createApp({ dataDir: h.dir }).close();
+  assert.deepEqual(stored().overlays[1], blur);
+});

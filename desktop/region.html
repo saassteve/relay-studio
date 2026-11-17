@@ -36,11 +36,23 @@
       small {
         opacity: 0.6;
       }
+      /* Read out, not shown. */
+      #said {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+      }
     </style>
   </head>
   <body>
-    <p>Drag to select your recording region. <small>Esc to cancel</small></p>
+    <p>
+      Drag to select your recording region, or use the arrow keys and press
+      Return. <small>Esc to cancel</small>
+    </p>
     <div id="region"></div>
+    <div id="said" role="status" aria-live="polite"></div>
     <script src="region.js"></script>
   </body>
 </html>

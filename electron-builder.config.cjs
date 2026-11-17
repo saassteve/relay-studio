@@ -1,4 +1,19 @@
 const path = require("node:path");
+// Where a packaged copy looks for its updates (desktop/updates.cjs). Nothing is
+// set for an ordinary build, which then never updates itself: only a copy signed
+// like the one it replaces can be installed over it. scripts/release-mac.sh sets
+// RELAY_UPDATE_REPO for the official build; a copy with its own release feed is
+// built with RELAY_UPDATE_URL instead.
+function updateFeed() {
+  if (process.env.RELAY_UPDATE_URL)
+    return { provider: "generic", url: process.env.RELAY_UPDATE_URL };
+  const repo = process.env.RELAY_UPDATE_REPO;
+  if (!repo) return null;
+  const match = repo.match(/^([A-Za-z0-9-]+)\/([A-Za-z0-9._-]+)$/);
+  if (!match)
+    throw new Error("RELAY_UPDATE_REPO must look like owner/repository.");
+  return { provider: "github", owner: match[1], repo: match[2] };
+}
 module.exports = {
   appId: "org.relayvideo.studio",
   productName: "Relay",
@@ -62,6 +77,10 @@ module.exports = {
     onlyLoadAppFromAsar: false,
   },
   dmg: {
+    // Updates install from the ZIP, and scripts/release-mac.sh writes
+    // latest-mac.yml from the notarized ZIPs. electron-builder must not write one
+    // of its own that lists the disk image.
+    writeUpdateInfo: false,
     title: "Install Relay",
     format: "ULFO",
     background: "desktop/dmg/background.png",
@@ -72,8 +91,8 @@ module.exports = {
       { x: 440, y: 200, type: "link", path: "/Applications" },
     ],
   },
-  // Official builds check GitHub for new releases (desktop/studio.cjs). A feed is
-  // only written into copies built with RELAY_UPDATE_URL, which update from it.
+  // Nothing is ever uploaded from here: releases are published by hand, and every
+  // script passes --publish never. The update feed itself is written by afterPack.
   publish: process.env.RELAY_UPDATE_URL
     ? [{ provider: "generic", url: process.env.RELAY_UPDATE_URL }]
     : undefined,
@@ -89,6 +108,20 @@ module.exports = {
             "app",
           )
         : path.join(context.appOutDir, "resources", "app");
+    // electron-builder writes app-update.yml only when it also builds the ZIP or
+    // disk image. A release packs the bare app first so that it can be signed, so
+    // the file is written here: before any signing, which then covers it.
+    const feed = updateFeed();
+    if (feed && context.electronPlatformName === "darwin") {
+      const lines = Object.entries({
+        ...feed,
+        updaterCacheDirName: context.packager.appInfo.updaterCacheDirName,
+      }).map(([key, value]) => `${key}: ${JSON.stringify(value)}`);
+      fs.writeFileSync(
+        path.join(base, "..", "app-update.yml"),
+        lines.join("\n") + "\n",
+      );
+    }
     const engines = path.join(base, "vendor", "ffmpeg");
     const bundled =
       fs.existsSync(engines) &&

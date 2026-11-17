@@ -9,7 +9,12 @@ import {
 } from "react";
 import { Pause, Play, Volume2, VolumeX } from "lucide-react";
 import { clock, type Project, type Word } from "./types";
-import { planLayout, type Box, type LayoutPreset } from "./layoutPlan";
+import {
+  onScreen,
+  planLayout,
+  type Box,
+  type LayoutPreset,
+} from "./layoutPlan";
 import "./draft-player.css";
 
 export interface DraftPlayerHandle {
@@ -198,12 +203,33 @@ export const DraftPlayer = forwardRef<
       t < o.end &&
       o.text.trim(),
   );
-  const effects = project.overlays.filter(
+  const showing = project.overlays.filter(
     (o) =>
       ["text", "arrow", "box", "blur", "cursor"].includes(o.type) &&
       t >= o.start &&
       t < o.end,
   );
+  // A blur over the screen picture belongs to the picture, as it does in the
+  // finished video: it is drawn on the picture, so a zoom or a change of layout
+  // carries it along. Where it sits is read in the video's own layout.
+  const resting = planLayout(
+    l,
+    (l.preset || "pip") as LayoutPreset,
+    aspect,
+    hasCamera && !cameraMissing,
+  );
+  const held = new Map(
+    showing
+      .filter((o) => o.type === "blur")
+      .map((o) => [o.id, onScreen(o, resting.screen, l.width, l.height)]),
+  );
+  const effects = showing.filter((o) => !held.get(o.id));
+  const zoomed: React.CSSProperties | undefined = zoom
+    ? {
+        transform: `scale(${zoom.scale})`,
+        transformOrigin: `${zoom.x * 100}% ${zoom.y * 100}%`,
+      }
+    : undefined;
   // Drag an effect to move it, or its corner to resize it. "focus" moves the point a
   // zoom closes in on, which is measured inside the screen picture.
   const drag =
@@ -216,13 +242,18 @@ export const DraftPlayer = forwardRef<
       const target = e.currentTarget,
         from = { x: e.clientX, y: e.clientY },
         start = { x: o.x, y: o.y, w: o.w, h: o.h },
+        // A blur on the screen picture is as large as the picture shows it.
+        grown =
+          held.get(o.id) && plan.screen && resting.screen
+            ? (plan.screen.w / resting.screen.w) * (zoom?.scale || 1)
+            : 1,
         within =
           mode === "focus" && plan.screen
             ? {
                 w: (area.width * plan.screen.w) / l.width,
                 h: (area.height * plan.screen.h) / l.height,
               }
-            : { w: area.width, h: area.height };
+            : { w: area.width * grown, h: area.height * grown };
       target.setPointerCapture(e.pointerId);
       const move = (ev: PointerEvent) => {
         const dx = (ev.clientX - from.x) / within.w,
@@ -351,15 +382,37 @@ export const DraftPlayer = forwardRef<
               if (v.videoWidth && v.videoHeight)
                 setAspect(v.videoWidth / v.videoHeight);
             }}
-            style={
-              zoom
-                ? {
-                    transform: `scale(${zoom.scale})`,
-                    transformOrigin: `${zoom.x * 100}% ${zoom.y * 100}%`,
-                  }
-                : undefined
-            }
+            style={zoomed}
           />
+          <div className="draft-on-screen" style={zoomed}>
+            {showing.map((o) => {
+              const on = held.get(o.id);
+              return (
+                on && (
+                  <div
+                    key={o.id}
+                    className="draft-fx blur"
+                    style={{
+                      left: `${on.x * 100}%`,
+                      top: `${on.y * 100}%`,
+                      width: `${on.w * 100}%`,
+                      height: `${on.h * 100}%`,
+                    }}
+                    onPointerDown={playing ? undefined : drag(o, "move")}
+                    onClick={still}
+                  >
+                    {onOverlay && !playing && (
+                      <i
+                        className="draft-fx-size"
+                        onPointerDown={drag(o, "size")}
+                        onClick={still}
+                      />
+                    )}
+                  </div>
+                )
+              );
+            })}
+          </div>
         </div>
         {hasCamera && (
           <div
@@ -408,7 +461,7 @@ export const DraftPlayer = forwardRef<
             {o.type === "text"
               ? o.text
               : o.type === "arrow"
-                ? "→"
+                ? o.text || "→"
                 : o.type === "cursor"
                   ? "●"
                   : null}

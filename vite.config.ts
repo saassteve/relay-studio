@@ -8,11 +8,7 @@ export default defineConfig({
   server: {
     host: "127.0.0.1",
     watch: {
-      ignored: [
-        "**/release/**",
-        "**/data/**",
-        "**/test-results/**",
-      ],
+      ignored: ["**/release/**", "**/data/**", "**/test-results/**"],
     },
   },
   build: {

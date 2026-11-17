@@ -48,6 +48,8 @@ export function createApp({
   dataDir = path.resolve("data"),
   password = process.env.ADMIN_PASSWORD || "",
   localSecret = "",
+  // Reads the app's HTML page. With it, a shared link's page carries preview tags.
+  shell,
 } = {}) {
   mkdirSync(path.join(dataDir, "media"), { recursive: true });
   mkdirSync(path.join(dataDir, "tmp"), { recursive: true });
@@ -145,11 +147,12 @@ export function createApp({
       return req.path;
     }
   };
-  // Allows `max` requests a minute per caller and target. `who` names the caller.
+  // Allows `max` requests a minute per caller and target. `who` names the caller,
+  // and `what` the target where every link of a kind should share one count.
   const limiter =
-    (max = 30, who = (req) => req.ip) =>
+    (max = 30, who = (req) => req.ip, what = target) =>
     (req, res, next) => {
-      const key = `${max} ${who(req)} ${req.method} ${target(req)}`,
+      const key = `${max} ${who(req)} ${req.method} ${what(req)}`,
         now = Date.now();
       let row = attempts.get(key);
       if (!row || row.reset < now) row = { count: 0, reset: now + 60000 };
@@ -163,7 +166,13 @@ export function createApp({
       next();
     };
   const rateLimit = limiter();
-  const { owner, admin } = createAuth({ app, db, password, rateLimit });
+  const { owner, admin } = createAuth({
+    app,
+    db,
+    password,
+    rateLimit,
+    limiter,
+  });
   const find = (id) => {
     const v = db.prepare("SELECT * FROM videos WHERE id=?").get(id);
     if (!v) throw problem(404, "This video could not be found.");
@@ -234,6 +243,7 @@ export function createApp({
     limiter,
     find,
     serialize,
+    shell,
   });
   const viewerCanRead = (v, user) =>
     user?.role !== "viewer" ||

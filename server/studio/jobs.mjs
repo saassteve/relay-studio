@@ -1,5 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { parseJSON, problem, publicError } from "./schema.mjs";
+// Work that runs beside everything else, one job at a time in each lane, so
+// that a transcript or a stream being prepared never holds up a render. Every
+// other kind of job shares the "media" lane.
+const LANES = {
+  ai: "'transcribe','summarize','prepare-ai','assist'",
+  stream: "'stream'",
+};
 export function createJobs(db) {
   const handlers = new Map();
   const working = new Set();
@@ -18,7 +25,7 @@ export function createJobs(db) {
       while (!closed) {
         const row = db
           .prepare(
-            `SELECT * FROM jobs WHERE status='queued' AND type ${lane === "ai" ? "IN" : "NOT IN"} ('transcribe','summarize','prepare-ai','assist') ORDER BY CASE type WHEN 'finish-recording' THEN 0 WHEN 'render' THEN 1 ELSE 2 END,created LIMIT 1`,
+            `SELECT * FROM jobs WHERE status='queued' AND type ${LANES[lane] ? `IN (${LANES[lane]})` : `NOT IN (${Object.values(LANES)})`} ORDER BY CASE type WHEN 'finish-recording' THEN 0 WHEN 'render' THEN 1 ELSE 2 END,created LIMIT 1`,
           )
           .get();
         if (!row) break;
@@ -74,7 +81,7 @@ export function createJobs(db) {
   };
   const wake = () => {
     void drain("media");
-    void drain("ai");
+    for (const lane of Object.keys(LANES)) void drain(lane);
   };
   return {
     get,

@@ -1,5 +1,5 @@
 import { problem, parseJSON } from "./schema.mjs";
-import { WALLPAPERS, PRESETS } from "./compose.mjs";
+import { WALLPAPERS, PRESETS, onScreen, planLayout } from "./compose.mjs";
 import { CAPTION_STYLES, TITLE_TYPES } from "./titles.mjs";
 // The shortest a layout change may be, with room for floating-point subtraction.
 const MIN_SCENE = 0.5 - 1e-6;
@@ -16,8 +16,12 @@ export const defaultLayout = () => ({
   audio: { microphone: 1, system: 1, normalize: true, denoise: false },
   captions: false,
 });
+// How the place of an effect on the frame is read. Since 2, a blur's place is
+// read in the video's own layout with no zoom on, wherever it was put.
+const PLACING = 2;
 export const initialProject = (v) => ({
   version: 1,
+  placing: PLACING,
   segments: [{ sourceId: v.id, start: 0, end: v.duration }],
   layout: defaultLayout(),
   overlays: [],
@@ -28,6 +32,8 @@ const number = (v, min, max, name) => {
     throw problem(400, `Invalid ${name}.`);
   return v;
 };
+// The ways an arrow can point. The font Relay ships draws all of them.
+export const ARROWS = ["→", "←", "↑", "↓", "↗", "↘", "↙", "↖"];
 export function validateProject(input, find) {
   if (
     !input ||
@@ -129,7 +135,13 @@ export function validateProject(input, find) {
         w: number(o.w ?? 0.3, 0.01, 1, "effect width"),
         h: number(o.h ?? 0.15, 0.01, 1, "effect height"),
         scale: number(o.scale ?? 1.8, 1, 4, "zoom"),
-        text: String(o.text || "").slice(0, 500),
+        // An arrow's text is the way it points.
+        text:
+          o.type === "arrow"
+            ? ARROWS.includes(o.text)
+              ? o.text
+              : ARROWS[0]
+            : String(o.text || "").slice(0, 500),
         ...(TITLE_TYPES.includes(o.type)
           ? { sub: String(o.sub || "").slice(0, 200) }
           : {}),
@@ -165,7 +177,66 @@ export function validateProject(input, find) {
     })
     .filter(Boolean)
     .sort((a, b) => a.start - b.start);
-  return { version: 1, segments, layout, overlays, scenes, cta };
+  return {
+    version: 1,
+    placing: PLACING,
+    segments,
+    layout,
+    overlays,
+    scenes,
+    cta,
+  };
+}
+// Before blurs belonged to the screen picture, a blur was put on the frame as
+// the preview showed it at that moment: enlarged if a zoom was on, and in
+// whichever layout was showing. This moves such a blur to where the same part
+// of the picture sits in the video's own layout with no zoom, which is how its
+// place is read now. `describe` gives a recording's shape and whether it has a
+// camera, or nothing if that isn't known yet, in which case nothing is changed.
+export function settleBlurs(project, describe) {
+  if (project.placing >= PLACING) return project;
+  const l = project.layout,
+    base = l.preset || "pip",
+    within = (n, min, max) => Math.max(min, Math.min(max, n));
+  const overlays = [];
+  for (const o of project.overlays || []) {
+    overlays.push(o);
+    if (o.type !== "blur") continue;
+    const zoom = project.overlays.find(
+        (z) => z.type === "zoom" && o.start >= z.start && o.start < z.end,
+      ),
+      scene = [...(project.scenes || [])]
+        .sort((a, b) => a.start - b.start)
+        .findLast((s) => o.start >= s.start && o.start < s.end),
+      preset = scene?.preset || base;
+    // Put on a picture that was neither enlarged nor moved: it is where it was.
+    if (!zoom && preset === base) continue;
+    let offset = 0;
+    const section = project.segments.find((s) => {
+      offset += s.end - s.start;
+      return o.start < offset;
+    });
+    const source = section && describe(section.sourceId);
+    if (!source) return project;
+    const shown = planLayout(l, preset, source.aspect, source.hasCamera),
+      resting = planLayout(l, base, source.aspect, source.hasCamera).screen,
+      on = onScreen(o, shown.screen, l.width, l.height);
+    if (!on || !resting) continue;
+    // The preview enlarged the picture around the zoom's point of focus.
+    const back = (at, focus) => (zoom ? focus + (at - focus) / zoom.scale : at),
+      left = back(on.x, zoom?.x),
+      top = back(on.y, zoom?.y),
+      right = back(on.x + on.w, zoom?.x),
+      bottom = back(on.y + on.h, zoom?.y);
+    overlays[overlays.length - 1] = {
+      ...o,
+      x: within((resting.x + left * resting.w) / l.width, 0, 0.95),
+      y: within((resting.y + top * resting.h) / l.height, 0, 0.95),
+      w: within(((right - left) * resting.w) / l.width, 0.01, 1),
+      h: within(((bottom - top) * resting.h) / l.height, 0.01, 1),
+    };
+  }
+  return { ...project, overlays, placing: PLACING };
 }
 export function getProject(v) {
   const p = parseJSON(v.project, {});

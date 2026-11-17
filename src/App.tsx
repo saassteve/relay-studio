@@ -25,6 +25,7 @@ import { Logo } from "./Logo";
 import { createPortal } from "react-dom";
 import { Menu as MoreMenu, Modal, confirmDialog } from "./Modal";
 import { WorkspaceSettings, InvitationPage } from "./WorkspaceSettings";
+import { PasswordResetPage } from "./Password";
 import { RecoveryCenter } from "./RecoveryCenter";
 import { startDraftSync } from "./drafts";
 import { Editor } from "./Editor";
@@ -142,7 +143,13 @@ export default function App() {
     });
   }, [session?.unlocked, token, notify, refresh]);
   useEffect(() => {
-    if (!session?.unlocked || token || path.startsWith("/invite/")) return;
+    if (
+      !session?.unlocked ||
+      token ||
+      path.startsWith("/invite/") ||
+      path.startsWith("/reset/")
+    )
+      return;
     let cancelled = false;
     void loadPreferences(true).then((p) => {
       if (cancelled) return;
@@ -498,9 +505,11 @@ export default function App() {
     document.title = `${
       path.startsWith("/invite/")
         ? "Join the workspace"
-        : session && !session.unlocked
-          ? "Sign in"
-          : sectionTitle
+        : path.startsWith("/reset/")
+          ? "Choose a new password"
+          : session && !session.unlocked
+            ? "Sign in"
+            : sectionTitle
     } · Relay`;
   }, [path, sectionTitle, session, active, loading, shareGate]);
   const changeSection = (s: string) => {
@@ -532,6 +541,8 @@ export default function App() {
   );
   if (path.startsWith("/invite/"))
     return <InvitationPage token={path.slice(8)} />;
+  if (path.startsWith("/reset/"))
+    return <PasswordResetPage token={path.slice(7)} />;
   if (active)
     return (
       <>
@@ -639,6 +650,12 @@ export default function App() {
                   Watch video
                   <ArrowRight size={15} />
                 </button>
+                {shareGate.requiresLogin && (
+                  <p className="muted small">
+                    Forgot your password? Ask the workspace owner for a reset
+                    link.
+                  </p>
+                )}
               </form>
             ) : (
               <>
@@ -750,6 +767,9 @@ export default function App() {
             Sign in
             <ArrowRight size={17} />
           </button>
+          <p className="muted small">
+            Forgot your password? Ask the workspace owner for a reset link.
+          </p>
         </form>
       </main>
     );
@@ -1298,6 +1318,15 @@ export default function App() {
                     <dd>
                       On a timeline bar: move it (add Shift to change its
                       length) or remove it
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>
+                      <kbd>S</kbd>
+                    </dt>
+                    <dd>
+                      On a section of the timeline: split it where the video is
+                      paused
                     </dd>
                   </div>
                   <div>

@@ -2,11 +2,16 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { layoutPieces } from "../server/studio/render.mjs";
 import {
+  onScreen,
   planLayout,
   wallpaperFile,
   WALLPAPERS,
 } from "../server/studio/compose.mjs";
-import { validateProject, defaultLayout } from "../server/studio/project.mjs";
+import {
+  validateProject,
+  defaultLayout,
+  settleBlurs,
+} from "../server/studio/project.mjs";
 
 const layout = () => ({
   ...defaultLayout(),
@@ -106,5 +111,103 @@ test("wallpapers ship with the app and project looks are validated", () => {
       { ...base, scenes: [{ start: 1, end: 1.2, preset: "pip" }] },
       find,
     ),
+  );
+});
+
+test("a blur over the screen picture is placed on the picture, and one beside it is not", () => {
+  const { screen } = planLayout(layout(), "screen", 16 / 9, false);
+  const blur = (x, y, w, h) => onScreen({ x, y, w, h }, screen, 1920, 1080);
+  // Its corners land on the same points of the frame, counted from the picture.
+  const middle = blur(0.4, 0.4, 0.2, 0.2);
+  const close = (a, b) => assert.ok(Math.abs(a - b) < 1e-6, `${a} is not ${b}`);
+  close(screen.x + middle.x * screen.w, 0.4 * 1920);
+  close(screen.y + middle.y * screen.h, 0.4 * 1080);
+  close(middle.w * screen.w, 0.2 * 1920);
+  close(middle.h * screen.h, 0.2 * 1080);
+  // One that hangs over the edge is kept to the part on the picture.
+  const edge = blur(0.85, 0.5, 0.1, 0.1);
+  assert.ok(Math.abs(edge.x + edge.w - 1) < 1e-9);
+  // One whose middle is on the wallpaper stays where it is in the frame.
+  assert.equal(blur(0, 0, 0.05, 0.05), null);
+  assert.equal(
+    onScreen({ x: 0.4, y: 0.4, w: 0.2, h: 0.2 }, null, 1920, 1080),
+    null,
+  );
+});
+
+test("an arrow points one of eight ways, and anything else points right", () => {
+  const find = () => ({ id: "v", duration: 10 });
+  const arrows = validateProject(
+    {
+      version: 1,
+      segments: [{ sourceId: "v", start: 0, end: 10 }],
+      overlays: ["↖", "←", "", "<script>", undefined].map((text, i) => ({
+        id: `a${i}`,
+        type: "arrow",
+        start: 0,
+        end: 1,
+        text,
+      })),
+    },
+    find,
+  ).overlays.map((o) => o.text);
+  assert.deepEqual(arrows, ["↖", "←", "→", "→", "→"]);
+});
+
+test("a blur placed under a zoom by an earlier version lands on the same part of the picture", () => {
+  // A full-frame screen, so places on the frame are places on the picture.
+  const old = {
+    version: 1,
+    segments: [{ sourceId: "v", start: 0, end: 10 }],
+    layout: { ...defaultLayout(), width: 1920, height: 1080, preset: "screen" },
+    scenes: [],
+    overlays: [
+      { id: "z", type: "zoom", start: 2, end: 6, x: 0.5, y: 0.5, scale: 2 },
+      // Put there while the preview showed the middle of the picture at twice
+      // its size: it covers the tenth of the picture to the right of the middle.
+      {
+        id: "a",
+        type: "blur",
+        start: 3,
+        end: 5,
+        x: 0.5,
+        y: 0.5,
+        w: 0.2,
+        h: 0.2,
+      },
+      // Put there with no zoom on: it stays.
+      {
+        id: "b",
+        type: "blur",
+        start: 7,
+        end: 8,
+        x: 0.1,
+        y: 0.1,
+        w: 0.2,
+        h: 0.2,
+      },
+    ],
+  };
+  const shape = () => ({ aspect: 16 / 9, hasCamera: false });
+  const settled = settleBlurs(old, shape);
+  const [, a, b] = settled.overlays;
+  const close = (got, want) =>
+    assert.ok(Math.abs(got - want) < 1e-9, `${got} is not ${want}`);
+  close(a.x, 0.5);
+  close(a.y, 0.5);
+  close(a.w, 0.1);
+  close(a.h, 0.1);
+  assert.deepEqual(b, old.overlays[2]);
+  // It is done once, and a project saved by this version needs none.
+  assert.equal(settled.placing, 2);
+  assert.equal(settleBlurs(settled, shape), settled);
+  assert.equal(
+    validateProject(old, () => ({ id: "v", duration: 10 })).placing,
+    2,
+  );
+  // Nothing is touched while a recording's shape isn't known.
+  assert.equal(
+    settleBlurs(old, () => null),
+    old,
   );
 });

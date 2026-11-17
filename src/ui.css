@@ -1,12 +1,17 @@
 /* Relay's control system. Loaded last so every screen uses the same
    buttons, fields, selects, checkboxes and sliders. */
 :root {
-  --ink: #1d2a23;
-  --ink-2: #44514a;
-  --muted: #5c685f;
-  --line: #dfe5d8;
-  --line-strong: #c9d2c0;
-  --surface: #fffffb;
+  /* Like the roles in styles.css, these take the dark theme's value when
+     there is one. The dark values themselves live there, in one place. */
+  --ink: var(--dark-ink, #1d2a23);
+  --ink-2: var(--dark-ink-2, #44514a);
+  --muted: var(--dark-muted, #5c685f);
+  --line: var(--dark-line, #dfe5d8);
+  --line-strong: var(--dark-line-strong, #c9d2c0);
+  /* The edge of a field. Darker than other lines so that it can be told from
+     the page around it (3 to 1), which is what marks a field as a field. */
+  --field-line: var(--dark-field-line, #879180);
+  --surface: var(--dark-surface, #fffffb);
   --focus: #5f8a3d;
   --control: 36px;
   --radius-control: 9px;
@@ -26,11 +31,11 @@ select:focus-visible,
 textarea:focus-visible,
 summary:focus-visible,
 [tabindex]:focus-visible {
-  outline: 2px solid var(--pine);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 .search-box input:focus-visible {
-  outline: 2px solid var(--pine);
+  outline: 2px solid var(--accent);
 }
 
 /* Buttons: three sizes, three looks. */
@@ -47,16 +52,16 @@ summary:focus-visible,
   gap: 7px;
 }
 .btn:hover {
-  background: #f1f4ea;
+  background: var(--dark-wash, #f1f4ea);
   transform: none;
 }
 .btn.primary {
-  background: var(--pine);
-  border-color: var(--pine);
-  color: #fbfdf5;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--dark-on-accent, #fbfdf5);
 }
 .btn.primary:hover {
-  background: #22503f;
+  background: var(--dark-accent-hover, #22503f);
 }
 .btn.small {
   min-height: 30px;
@@ -71,8 +76,8 @@ summary:focus-visible,
   border-radius: 11px;
 }
 .btn.destructive {
-  background: #a53f37;
-  border-color: #a53f37;
+  background: var(--dark-danger-fill, #a53f37);
+  border-color: var(--dark-danger-fill, #a53f37);
   color: #fff;
 }
 .btn:disabled,
@@ -90,7 +95,7 @@ button:disabled {
   min-height: 28px;
 }
 .text-button:hover {
-  color: var(--pine);
+  color: var(--accent-text);
 }
 .icon-button {
   width: 34px;
@@ -111,7 +116,7 @@ select,
 textarea {
   min-height: var(--control);
   padding: 7px 11px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--field-line);
   border-radius: var(--radius-control);
   background: var(--surface);
   color: var(--ink);
@@ -131,18 +136,21 @@ input:not(
   ):hover,
 select:hover,
 textarea:hover {
-  border-color: #aeb9a4;
+  border-color: var(--dark-line-strong, #aeb9a4);
 }
 input::placeholder,
 textarea::placeholder {
-  color: #6b766d;
+  color: var(--dark-faint, #6b766d);
   opacity: 1;
 }
 select {
   appearance: none;
   -webkit-appearance: none;
   padding-right: 32px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2344514a' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-image: var(
+    --dark-chevron-down,
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2344514a' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")
+  );
   background-repeat: no-repeat;
   background-position: right 11px center;
   cursor: pointer;
@@ -166,7 +174,7 @@ input[type="checkbox"] {
   width: 18px;
   height: 18px;
   margin: 0;
-  border: 1.5px solid #9aa690;
+  border: 1.5px solid var(--dark-line-strong, #9aa690);
   border-radius: 5px;
   background: var(--surface);
   cursor: pointer;
@@ -182,12 +190,12 @@ input[type="checkbox"]::after {
   height: 10px;
   transform: scale(0);
   transition: transform 0.12s;
-  background: #fbfdf5;
+  background: var(--dark-on-accent, #fbfdf5);
   clip-path: polygon(14% 52%, 0 66%, 38% 100%, 100% 22%, 86% 10%, 37% 70%);
 }
 input[type="checkbox"]:checked {
-  background: var(--pine);
-  border-color: var(--pine);
+  background: var(--accent);
+  border-color: var(--accent);
 }
 input[type="checkbox"]:checked::after {
   transform: scale(1);
@@ -214,7 +222,7 @@ input[type="range"] {
 input[type="range"]::-webkit-slider-runnable-track {
   height: 5px;
   border-radius: 5px;
-  background: #8a957f;
+  background: var(--dark-field-line, #8a957f);
 }
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
@@ -222,9 +230,9 @@ input[type="range"]::-webkit-slider-thumb {
   height: 18px;
   margin-top: -6.5px;
   border-radius: 50%;
-  background: #fff;
-  border: 2px solid var(--pine);
-  box-shadow: 0 1px 3px #173e3233;
+  background: var(--dark-surface, #fff);
+  border: 2px solid var(--accent);
+  box-shadow: 0 1px 3px var(--dark-shadow-2, #173e3233);
   transition: transform 0.12s;
 }
 input[type="range"]:hover::-webkit-slider-thumb {
@@ -233,14 +241,14 @@ input[type="range"]:hover::-webkit-slider-thumb {
 input[type="range"]::-moz-range-track {
   height: 5px;
   border-radius: 5px;
-  background: #8a957f;
+  background: var(--dark-field-line, #8a957f);
 }
 input[type="range"]::-moz-range-thumb {
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background: #fff;
-  border: 2px solid var(--pine);
+  background: var(--dark-surface, #fff);
+  border: 2px solid var(--accent);
 }
 
 /* Colour pickers show as a swatch. */
@@ -368,13 +376,13 @@ kbd {
 .wallpaper-grid button.selected,
 .bg-chip.selected,
 .caption-styles button.selected {
-  border-color: var(--pine);
+  border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--surface) inset;
 }
 .wallpaper-grid button:focus-visible,
 .bg-chip:focus-visible,
 .caption-styles button:focus-visible {
-  outline: 2px solid var(--pine);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
@@ -388,10 +396,10 @@ input:not(
 ),
 select,
 textarea {
-  border-color: #8a957f;
+  border-color: var(--dark-field-line, #8a957f);
 }
 input[type="checkbox"] {
-  border-color: #7c8873;
+  border-color: var(--dark-field-line, #7c8873);
 }
 
 /* Dialogs: tall ones scroll from the top instead of losing their heading. */
@@ -466,8 +474,8 @@ input[type="checkbox"] {
   padding: 16px;
   border: 1px solid var(--line);
   border-radius: 14px;
-  background: var(--surface);
-  box-shadow: 0 16px 50px #173e3226;
+  background: var(--dark-raised, var(--surface));
+  box-shadow: 0 16px 50px var(--dark-shadow-2, #173e3226);
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -476,7 +484,7 @@ input[type="checkbox"] {
   margin: 0;
 }
 .text-button.danger {
-  color: #a53f37;
+  color: var(--danger);
 }
 
 /* Editor: status and the one publishing action. */
@@ -509,10 +517,10 @@ input[type="checkbox"] {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #6f9a45;
+  background: var(--dark-ok-fill, #6f9a45);
 }
 .save-state.is-pending {
-  color: #7a5a12;
+  color: var(--dark-warn-text, #7a5a12);
 }
 .save-state.is-pending::before {
   background: #e0a526;
@@ -522,7 +530,7 @@ input[type="checkbox"] {
   gap: 4px;
   padding: 4px;
   border-radius: 12px;
-  background: #eef2e6;
+  background: var(--dark-well, #eef2e6);
   border: 0;
   overflow-x: auto;
   scrollbar-width: none;
@@ -544,8 +552,8 @@ input[type="checkbox"] {
 }
 .studio-tabs button.active {
   background: var(--surface);
-  color: var(--pine);
-  box-shadow: 0 1px 3px #173e3222;
+  color: var(--heading);
+  box-shadow: 0 1px 3px var(--dark-shadow-1, #173e3222);
 }
 .studio-content {
   padding: 20px 2px 8px;
@@ -560,13 +568,13 @@ input[type="checkbox"] {
   font-size: 13px;
   padding: 10px 14px;
   border-radius: 10px;
-  background: #eef2e6;
+  background: var(--wash);
   margin-bottom: 10px;
 }
 .studio-job progress {
   flex: 1;
   height: 6px;
-  accent-color: var(--pine);
+  accent-color: var(--accent);
 }
 
 /* Cut tab. */
@@ -580,8 +588,8 @@ input[type="checkbox"] {
   min-width: 34px;
   border-radius: 10px;
   border: 2px solid transparent;
-  background: #dfe8d2;
-  color: var(--pine);
+  background: var(--dark-wash-strong, #dfe8d2);
+  color: var(--heading);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -631,10 +639,10 @@ input[type="checkbox"] {
   border-radius: 6px;
   background: linear-gradient(
     to right,
-    #dbe2d2 var(--from),
-    var(--pine) var(--from),
-    var(--pine) var(--to),
-    #dbe2d2 var(--to)
+    var(--dark-wash-strong, #dbe2d2) var(--from),
+    var(--accent) var(--from),
+    var(--accent) var(--to),
+    var(--dark-wash-strong, #dbe2d2) var(--to)
   );
 }
 .trim-range input[type="range"] {
@@ -676,7 +684,7 @@ input[type="checkbox"] {
   flex: 1;
 }
 .btn.danger {
-  color: #a53f37;
+  color: var(--danger);
 }
 .cut-cleanup {
   display: flex;
@@ -732,9 +740,9 @@ input[type="checkbox"] {
 .share-note.warn {
   padding: 10px 12px;
   border-radius: 10px;
-  background: #fff5d9;
-  border: 1px solid #edd592;
-  color: #6b5210;
+  background: var(--dark-warn-bg, #fff5d9);
+  border: 1px solid var(--dark-warn-line, #edd592);
+  color: var(--dark-warn-text, #6b5210);
 }
 .share-link {
   align-items: center;
@@ -891,11 +899,11 @@ input[type="checkbox"] {
   padding: 3px 8px;
   border-radius: 6px;
   border: 1px solid var(--line-strong);
-  background: #f1f4ea;
+  background: var(--dark-wash, #f1f4ea);
   font:
     600 12px "DM Sans",
     sans-serif;
-  color: var(--pine);
+  color: var(--heading);
 }
 .settings-dialog {
   max-width: 640px;
@@ -903,7 +911,10 @@ input[type="checkbox"] {
 
 /* Every dropdown shows its arrow, whatever local styles say. */
 select {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2344514a' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") !important;
+  background-image: var(
+    --dark-chevron-down,
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2344514a' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")
+  ) !important;
   background-repeat: no-repeat !important;
   background-position: right 11px center !important;
   padding-right: 32px !important;
@@ -912,7 +923,7 @@ select {
 .sort {
   width: auto;
   min-width: 150px;
-  border: 1px solid #8a957f;
+  border: 1px solid var(--dark-field-line, #8a957f);
 }
 input[type="checkbox"] {
   width: 18px !important;
@@ -967,8 +978,8 @@ input[type="checkbox"] {
   border-radius: 5px;
 }
 .transcript-words button.selected {
-  background: #f6d9d3;
-  color: #7c2a20;
+  background: var(--dark-error-bg, #f6d9d3);
+  color: var(--dark-danger-text, #7c2a20);
   text-decoration: line-through;
 }
 .transcript-words button.match {
@@ -1020,6 +1031,17 @@ input[type="checkbox"] {
   border-top: 0;
   padding-top: 0;
   margin-top: 14px;
+}
+/* Appearance: light, dark or the system's choice. */
+.appearance-setting {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+.appearance-setting .studio-hint {
+  flex: 1 1 240px;
+  margin: 0;
 }
 
 /* Look tab: one card per job, each with a plain heading. */
@@ -1104,7 +1126,7 @@ input[type="checkbox"] {
   gap: 10px 12px;
   border-color: var(--line);
   border-radius: 12px;
-  background: #f6f8f1;
+  background: var(--dark-well, #f6f8f1);
 }
 .look-card .effect-row > strong {
   flex-basis: 100%;
@@ -1238,7 +1260,7 @@ textarea {
   textarea
 ):not(.editable-title, .watch-speed, .search-box input) {
   min-height: var(--control);
-  border: 1px solid #8a957f !important;
+  border: 1px solid var(--dark-field-line, #8a957f) !important;
   border-radius: var(--radius-control) !important;
   background-color: var(--surface);
   color: var(--ink);
@@ -1256,13 +1278,13 @@ textarea {
   height: var(--control);
   max-width: 240px;
   padding: 0 10px;
-  border: 1px solid #8a957f;
+  border: 1px solid var(--dark-field-line, #8a957f);
   border-radius: var(--radius-control);
   background: var(--surface);
   color: var(--ink-2);
 }
 .search-box:focus-within {
-  outline: 2px solid var(--pine);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 .search-box input,
@@ -1275,7 +1297,7 @@ textarea {
   outline: none;
 }
 select.sort {
-  border-color: #8a957f;
+  border-color: var(--dark-field-line, #8a957f);
 }
 .view-toggle button {
   color: var(--ink-2);
@@ -1295,9 +1317,9 @@ select.sort {
 .btn.danger:disabled,
 .btn.destructive:disabled {
   opacity: 1;
-  background: #eef1e8;
+  background: var(--dark-wash, #eef1e8);
   border-color: var(--line);
-  color: #6b766d;
+  color: var(--dark-faint, #6b766d);
 }
 .btn:disabled svg {
   opacity: 0.7;
@@ -1325,7 +1347,10 @@ summary::-webkit-details-marker {
   width: 12px;
   height: 12px;
   flex: none;
-  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2344514a' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m9 6 6 6-6 6'/%3E%3C/svg%3E")
+  background: var(
+      --dark-chevron-right,
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2344514a' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m9 6 6 6-6 6'/%3E%3C/svg%3E")
+    )
     center / contain no-repeat;
   transition: transform 0.15s;
 }
@@ -1378,7 +1403,7 @@ summary::-webkit-details-marker {
   border-top: 0;
 }
 .profile-row:hover {
-  background: #e9eee2;
+  background: var(--dark-wash, #e9eee2);
 }
 .profile-row strong {
   font-size: 13px;
@@ -1399,7 +1424,7 @@ summary::-webkit-details-marker {
 }
 .star-button:hover,
 .card-menu > summary:hover {
-  background: #eef1e8;
+  background: var(--dark-wash, #eef1e8);
 }
 .card-menu {
   margin-left: 0;
@@ -1423,10 +1448,10 @@ summary::-webkit-details-marker {
   text-align: left;
 }
 .menu-item:hover {
-  background: #eef1e8;
+  background: var(--dark-wash, #eef1e8);
 }
 .menu-item.danger {
-  color: #a53f37;
+  color: var(--danger);
 }
 @media (max-width: 700px) {
   .phone-only {
@@ -1469,8 +1494,8 @@ summary::-webkit-details-marker {
   z-index: 200;
   padding: 10px 14px;
   border-radius: 10px;
-  background: var(--pine);
-  color: #fff;
+  background: var(--accent);
+  color: var(--dark-on-accent, #fff);
   font-size: 14px;
   font-weight: 600;
 }
@@ -1483,7 +1508,7 @@ summary::-webkit-details-marker {
   text-decoration: none;
 }
 .transcript-words button.cut {
-  color: #6b766d;
+  color: var(--dark-faint, #6b766d);
   text-decoration: line-through;
   cursor: default;
 }
@@ -1491,13 +1516,13 @@ summary::-webkit-details-marker {
   background: none;
 }
 .transcript-words button.match {
-  background: #fde9a8;
+  background: var(--dark-warn-wash, #fde9a8);
 }
 .rec-notice {
   margin: 0;
   padding: 9px 12px;
   border-radius: 9px;
-  background: #eef2e6;
+  background: var(--wash);
   color: var(--ink-2);
   font-size: 13px;
 }
@@ -1539,7 +1564,7 @@ summary::-webkit-details-marker {
   color: var(--ink);
 }
 .transcript-phrases button:hover {
-  background: #eef2e6;
+  background: var(--wash);
 }
 .transcript-phrases button span {
   flex: none;
@@ -1656,21 +1681,21 @@ summary::-webkit-details-marker {
   padding: 4px;
   border: 1px solid var(--line);
   border-radius: 12px;
-  background: #f1f4ea;
+  background: var(--dark-well, #f1f4ea);
 }
 .cut-timeline button {
   flex-direction: row;
   gap: 8px;
   border-radius: 8px;
   border: 1.5px solid transparent;
-  background: #dfe8d2;
+  background: var(--dark-wash-strong, #dfe8d2);
   font-size: 12px;
 }
 .cut-timeline button small {
   font-size: 12px;
 }
 .cut-timeline button.selected {
-  background: #eaf5c6;
+  background: var(--dark-wash, #eaf5c6);
   border-color: var(--pine);
 }
 
@@ -1704,7 +1729,7 @@ summary::-webkit-details-marker {
   color: var(--ink);
 }
 .notification-item:hover {
-  background: #eef2e6;
+  background: var(--wash);
 }
 .notification-item > span:nth-child(2) {
   flex: 1;
@@ -1725,12 +1750,12 @@ summary::-webkit-details-marker {
   height: 8px;
   margin-top: 7px;
   border-radius: 50%;
-  background: #4f7a2a;
+  background: var(--dark-accent, #4f7a2a);
 }
 .role-pill {
   padding: 3px 10px;
   border-radius: 99px;
-  background: #eef2e6;
+  background: var(--wash);
   color: var(--ink-2);
   font-size: 12px;
   font-weight: 600;
@@ -1776,7 +1801,7 @@ summary::-webkit-details-marker {
 .dialog-close {
   z-index: 4;
   border-radius: 9px;
-  background: #fcfdf7;
+  background: var(--raised);
 }
 @media (max-width: 700px) {
   .dialog:has(> .dialog-body) {
@@ -1842,11 +1867,15 @@ summary::-webkit-details-marker {
 /* A soft edge shows there is more to scroll to. */
 .dialog-body {
   background:
-    linear-gradient(#fcfdf7 30%, #fcfdf700) top / 100% 36px no-repeat local,
-    linear-gradient(#fcfdf700, #fcfdf7 70%) bottom / 100% 36px no-repeat local,
-    linear-gradient(#173e3214, #173e3200) top / 100% 10px no-repeat scroll,
-    linear-gradient(#173e3200, #173e3214) bottom / 100% 10px no-repeat scroll,
-    #fcfdf7;
+    linear-gradient(var(--raised) 30%, #fcfdf700) top / 100% 36px no-repeat
+      local,
+    linear-gradient(#fcfdf700, var(--raised) 70%) bottom / 100% 36px no-repeat
+      local,
+    linear-gradient(var(--dark-shadow-1, #173e3214), #173e3200) top / 100% 10px
+      no-repeat scroll,
+    linear-gradient(#173e3200, var(--dark-shadow-1, #173e3214)) bottom / 100%
+      10px no-repeat scroll,
+    var(--raised);
 }
 
 /* ---- Look tab, second pass: two columns of cards, one slider. ---- */
@@ -1896,14 +1925,14 @@ summary::-webkit-details-marker {
 .slider input[type="range"]::-webkit-slider-runnable-track {
   background: linear-gradient(
     to right,
-    var(--pine) var(--fill, 0%),
-    #a9b3a0 var(--fill, 0%)
+    var(--accent) var(--fill, 0%),
+    var(--dark-field-line, #a9b3a0) var(--fill, 0%)
   );
 }
 .slider input[type="range"]::-moz-range-progress {
   height: 5px;
   border-radius: 5px;
-  background: var(--pine);
+  background: var(--accent);
 }
 .camera-fields {
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
@@ -1988,26 +2017,26 @@ summary::-webkit-details-marker {
 /* Selection is always more than a tint. */
 .studio-tabs button.active,
 .choice button.selected {
-  box-shadow: inset 0 0 0 1.5px var(--pine);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
 }
 .view-toggle button.active {
-  background: var(--pine);
-  color: #fbfdf5;
+  background: var(--accent);
+  color: var(--dark-on-accent, #fbfdf5);
 }
 .transcript-words button.selected {
   box-shadow: inset 0 0 0 2px var(--pine);
 }
 .transcript-words button.match {
-  text-decoration: underline 2px #7a5a12;
+  text-decoration: underline 2px var(--dark-warn-text, #7a5a12);
   text-underline-offset: 3px;
 }
 .audio-meter,
 .mic-meter {
-  background: #8a957f;
+  background: var(--dark-field-line, #8a957f);
 }
 .audio-meter i,
 .mic-meter i {
-  background: var(--pine);
+  background: var(--accent);
 }
 /* Touch: every control is a comfortable size, and typing never zooms the page. */
 @media (pointer: coarse) {
@@ -2087,7 +2116,7 @@ summary::-webkit-details-marker {
 .share-link {
   border-color: var(--line);
   border-radius: 12px;
-  background: #f1f4ea;
+  background: var(--dark-well, #f1f4ea);
 }
 .share-link input {
   text-overflow: ellipsis;
@@ -2171,7 +2200,7 @@ summary::-webkit-details-marker {
   font-size: 16px;
 }
 .share-note a {
-  color: var(--pine);
+  color: var(--accent-text);
   font-weight: 600;
   text-decoration: underline;
   text-underline-offset: 3px;
@@ -2192,7 +2221,7 @@ summary::-webkit-details-marker {
   z-index: 3;
   margin: -28px -28px 14px;
   padding: 24px 28px 12px;
-  background: #fcfdf7;
+  background: var(--raised);
   border-bottom: 1px solid var(--line);
 }
 .camera-fields {
@@ -2250,24 +2279,24 @@ summary::-webkit-details-marker {
 .slider input[type="range"]::-webkit-slider-runnable-track {
   background: linear-gradient(
     to right,
-    var(--pine) var(--fill, 0%),
-    #7c8873 var(--fill, 0%)
+    var(--accent) var(--fill, 0%),
+    var(--dark-field-line, #7c8873) var(--fill, 0%)
   );
 }
 input[type="range"]::-moz-range-track {
-  background: #7c8873;
+  background: var(--dark-field-line, #7c8873);
 }
 .trim-range::before {
   background: linear-gradient(
     to right,
-    #7c8873 var(--from),
-    var(--pine) var(--from),
-    var(--pine) var(--to),
-    #7c8873 var(--to)
+    var(--dark-field-line, #7c8873) var(--from),
+    var(--accent) var(--from),
+    var(--accent) var(--to),
+    var(--dark-field-line, #7c8873) var(--to)
   );
 }
 .bg-chip:not(.selected) {
-  border: 1px solid #8a957f;
+  border: 1px solid var(--dark-field-line, #8a957f);
 }
 .blur-swatch {
   filter: none;
@@ -2275,18 +2304,18 @@ input[type="range"]::-moz-range-track {
 }
 .look-card .effect-row input,
 .look-card .effect-row select {
-  border-color: #7c8873 !important;
+  border-color: var(--dark-field-line, #7c8873) !important;
 }
 /* Each trim handle shows its own focus. */
 .trim-range input[type="range"]:focus-visible {
   outline: none;
 }
 .trim-range input[type="range"]:focus-visible::-webkit-slider-thumb {
-  outline: 2px solid var(--pine);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 .trim-range input[type="range"]:focus-visible::-moz-range-thumb {
-  outline: 2px solid var(--pine);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 @media (max-width: 360px) {
@@ -2382,13 +2411,13 @@ input[type="range"]::-moz-range-track {
 .mode-options > button.selected,
 .ai-providers button.selected,
 .preset-tiles button.selected {
-  border-color: var(--pine);
-  background: #eef2e6;
+  border-color: var(--accent);
+  background: var(--dark-accent-wash, #eef2e6);
   color: var(--ink);
-  box-shadow: inset 0 0 0 1px var(--pine);
+  box-shadow: inset 0 0 0 1px var(--accent);
 }
 .mode-options > button.selected > svg {
-  color: var(--pine);
+  color: var(--accent-text);
 }
 
 /* ---- Round 6 ---- */
@@ -2404,8 +2433,8 @@ main[tabindex="-1"]:focus-visible {
 .choice button.selected {
   background: var(--surface);
   box-shadow:
-    inset 0 0 0 1px var(--pine),
-    0 1px 3px #173e3222;
+    inset 0 0 0 1px var(--accent),
+    0 1px 3px var(--dark-shadow-1, #173e3222);
 }
 .choice-only {
   font-size: 13px;
@@ -2413,7 +2442,7 @@ main[tabindex="-1"]:focus-visible {
   color: var(--ink-2);
 }
 .look-card .effect-row.is-picked {
-  box-shadow: 0 0 0 2px var(--pine);
+  box-shadow: 0 0 0 2px var(--accent);
   transition: box-shadow 0.2s;
 }
 /* Look tab: one field size, even gaps. */
@@ -2516,7 +2545,7 @@ main[tabindex="-1"]:focus-visible {
 .studio-tabs button.active {
   position: relative;
   background: var(--surface);
-  box-shadow: 0 1px 3px #173e3233;
+  box-shadow: 0 1px 3px var(--dark-shadow-2, #173e3233);
 }
 .studio-tabs button.active::after {
   content: "";
@@ -2526,7 +2555,7 @@ main[tabindex="-1"]:focus-visible {
   bottom: 3px;
   height: 2px;
   border-radius: 2px;
-  background: var(--pine);
+  background: var(--accent);
 }
 .preview-dock.is-stuck {
   padding-bottom: 8px;
@@ -2535,10 +2564,10 @@ main[tabindex="-1"]:focus-visible {
 .slider input[type="range"]::-webkit-slider-runnable-track {
   background: linear-gradient(
     to right,
-    var(--pine) var(--fill, 0%),
-    #e3e9da var(--fill, 0%)
+    var(--accent) var(--fill, 0%),
+    var(--dark-wash-strong, #e3e9da) var(--fill, 0%)
   );
-  box-shadow: inset 0 0 0 1px #7c8873;
+  box-shadow: inset 0 0 0 1px var(--dark-field-line, #7c8873);
 }
 .caption-styles .bold {
   color: #fff;
@@ -2639,7 +2668,7 @@ main[tabindex="-1"]:focus-visible {
 }
 .engagement-chart > div > i,
 .analytics-bars i {
-  background: var(--pine);
+  background: var(--accent);
 }
 .shortcut-list > div {
   grid-template-columns: 132px 1fr;
@@ -2666,7 +2695,7 @@ main[tabindex="-1"]:focus-visible {
   text-decoration: underline;
 }
 .review-footer a.maker {
-  color: var(--muted, #5c685f);
+  color: var(--muted);
   font-weight: 600;
 }
 .dialog-footer .small a {
@@ -2699,7 +2728,7 @@ main[tabindex="-1"]:focus-visible {
   min-width: 0;
 }
 .cloud-connected small {
-  color: var(--muted, #5c685f);
+  color: var(--muted);
 }
 .share-connect {
   margin: 12px 0 0;
@@ -2711,7 +2740,7 @@ main[tabindex="-1"]:focus-visible {
   scroll-margin-top: 72px;
 }
 .studio-hint a {
-  color: var(--pine, #173e32);
+  color: var(--accent-text);
   font-weight: 600;
   text-decoration: underline;
   text-underline-offset: 2px;
@@ -2732,11 +2761,11 @@ main[tabindex="-1"]:focus-visible {
   text-align: left;
 }
 .sign-out:hover {
-  background: #e9eee2;
+  background: var(--dark-wash, #e9eee2);
 }
 .rec-notice.is-warning {
-  background: #f8ede5;
-  color: #9d533c;
+  background: var(--dark-error-bg, #f8ede5);
+  color: var(--dark-danger-text, #9d533c);
 }
 .screen-blocked p {
   margin: 0 0 8px;
@@ -2745,4 +2774,168 @@ main[tabindex="-1"]:focus-visible {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+/* Passwords: the form in Settings and the reset link the owner hands out. */
+.change-password > .btn {
+  margin: 0 0 12px;
+}
+.reset-link .invite-row {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.reset-link input {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+}
+.reset-link .studio-hint {
+  margin-top: 6px;
+}
+.login-form p.small,
+.viewer-gate p.small {
+  font-size: 12px;
+  margin-top: 14px;
+}
+
+/* ---- Timeline sections: drag an end to trim, drag the middle to reorder. ---- */
+.timeline .tl-clips button {
+  /* The trim handles of a short section sit just outside it. */
+  overflow: visible;
+  container-type: inline-size;
+  cursor: grab;
+  touch-action: none;
+}
+.timeline .tl-clips button:only-child {
+  cursor: pointer;
+}
+.timeline .tl-clips button > span {
+  display: block;
+  /* Clear of the handle at the start. */
+  padding-left: 7px;
+  overflow: hidden;
+  pointer-events: none;
+}
+.timeline .tl-clips button.selected {
+  z-index: 1;
+}
+.tl-trim {
+  position: absolute;
+  top: -1.5px;
+  bottom: -1.5px;
+  left: -1.5px;
+  width: 14px;
+  border-radius: 8px 0 0 8px;
+  cursor: ew-resize;
+}
+.tl-trim.end {
+  left: auto;
+  right: -1.5px;
+  border-radius: 0 8px 8px 0;
+}
+.tl-trim::after {
+  content: "";
+  position: absolute;
+  top: 9px;
+  bottom: 9px;
+  left: 5px;
+  width: 3px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: 0.45;
+}
+.tl-trim.end::after {
+  left: auto;
+  right: 5px;
+}
+.tl-clips button:hover .tl-trim::after,
+.tl-clips button.selected .tl-trim::after {
+  opacity: 0.85;
+}
+.tl-trim:hover {
+  background: #ffffff24;
+}
+.tl-trim:hover::after,
+.tl-clips button.is-trimmed .tl-trim::after {
+  opacity: 1;
+}
+.tl-clips button.selected .tl-trim::after {
+  background: var(--lime);
+}
+/* Too short to hold two handles and still be picked up: only the selected section
+   shows them, outside its ends, so the whole of it can still be dragged. */
+@container (max-width: 36px) {
+  .tl-trim {
+    display: none;
+  }
+  .tl-clips button.selected .tl-trim {
+    display: block;
+    left: -13px;
+    width: 12px;
+    background: var(--lime);
+  }
+  .tl-clips button.selected .tl-trim.end {
+    left: auto;
+    right: -13px;
+  }
+  .tl-clips button.selected .tl-trim::after {
+    left: 4.5px;
+    background: #173e32;
+  }
+  .tl-clips button.selected .tl-trim.end::after {
+    left: auto;
+    right: 4.5px;
+  }
+}
+/* The section being dragged rides above the others. */
+.timeline .tl-clips button.is-moving,
+.timeline .tl-clips button.is-trimmed {
+  z-index: 2;
+  box-shadow: 0 4px 14px #00000073;
+}
+.timeline .tl-clips button.is-moving {
+  cursor: grabbing;
+  opacity: 0.92;
+}
+/* The dragged end stands in for the playhead until it is let go. */
+.timeline-area.is-trimming .tl-now {
+  visibility: hidden;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .tl-clips.is-reordering button:not(.is-moving) {
+    transition: left 0.14s ease;
+  }
+}
+@media (pointer: coarse) {
+  .tl-trim {
+    width: 20px;
+  }
+}
+
+/* The welcome step fits a phone without scrolling: its four cards sit closer
+   together and the footer keeps to its two buttons. */
+@media (max-width: 900px) {
+  .welcome-panel .promise-grid {
+    margin-top: 18px;
+    gap: 8px;
+  }
+  .welcome-panel .promise-grid > div {
+    padding: 11px 14px;
+  }
+  .welcome-panel > .onboarding-footer {
+    margin-top: 16px;
+    padding-top: 14px;
+  }
+  .welcome-panel .onboarding-footer .footer-note {
+    display: none;
+  }
+}
+
+/* Joining a workspace and choosing a new password: the hint under the field
+   keeps clear of the button below it. */
+.invitation-page .field-block {
+  margin-bottom: 16px;
+}
+.invitation-page .field-block .small {
+  display: block;
+  margin-top: 6px;
 }

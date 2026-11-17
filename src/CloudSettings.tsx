@@ -129,7 +129,7 @@ function Connect({ notify }: { notify: (s: string) => void }) {
           <a href={SELF_HOST_URL} {...external}>
             Host Relay yourself
           </a>
-          . It is free and takes about ten minutes.
+          . It is free. You need a machine that stays on and a domain name.
         </p>
       )}
     </>

@@ -1,5 +1,6 @@
 import express from "express";
 import path from "node:path";
+import { readFile } from "node:fs/promises";
 import { createApp } from "./app.mjs";
 import { stopChildren } from "./children.mjs";
 
@@ -22,12 +23,21 @@ if (!production && !["127.0.0.1", "localhost", "::1"].includes(host))
   throw new Error(
     "Development mode only runs on this computer. To listen on another HOST, run `npm run build` and then `npm start`.",
   );
+let vite;
 const { app, close } = createApp({
   dataDir: process.env.DATA_DIR
     ? path.resolve(process.env.DATA_DIR)
     : undefined,
+  // Shared links answer with this page plus their preview tags. In development
+  // Vite has to prepare it first, as it does for every other address.
+  shell: async (req) =>
+    production
+      ? readFile(path.resolve("dist", "index.html"), "utf8")
+      : vite.transformIndexHtml(
+          req.originalUrl,
+          await readFile(path.resolve("index.html"), "utf8"),
+        ),
 });
-let vite;
 if (production) {
   app.use(express.static(path.resolve("dist")));
   // A missing build file must not be answered with the app's page: a browser
