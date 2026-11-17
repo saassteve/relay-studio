@@ -24,6 +24,7 @@ let mainWindow,
   baseURL,
   selectedSource,
   pickerSources = [],
+  sourceListing,
   selectedDisplay,
   nativeStudio,
   captureUI,
@@ -397,11 +398,16 @@ app
       pickerSources = [];
       let sources;
       try {
-        sources = await desktopCapturer.getSources({
-          types: ["screen", "window"],
-          thumbnailSize: { width: 360, height: 210 },
-          fetchWindowIcons: false,
-        });
+        sourceListing ??= desktopCapturer
+          .getSources({
+            types: ["screen", "window"],
+            thumbnailSize: { width: 360, height: 210 },
+            fetchWindowIcons: false,
+          })
+          .finally(() => {
+            sourceListing = undefined;
+          });
+        sources = await sourceListing;
       } catch {
         // On a Mac this is what a missing or out-of-date permission looks like.
         throw new Error("screen-permission");

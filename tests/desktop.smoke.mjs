@@ -128,6 +128,7 @@ try {
     globalThis.__relaySourceCalls = 0;
     desktopCapturer.getSources = async () => {
       globalThis.__relaySourceCalls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 200));
       return [
         {
           id: "screen:999:0",
@@ -139,7 +140,11 @@ try {
     };
   });
   try {
-    const sources = await window.evaluate(() => window.relayDesktop.sources());
+    const [sources, retry] = await Promise.all([
+      window.evaluate(() => window.relayDesktop.sources()),
+      window.evaluate(() => window.relayDesktop.sources()),
+    ]);
+    assert.deepEqual(retry, sources);
     assert.equal(sources[0].name, "Test screen");
     await window.evaluate(() =>
       window.relayDesktop.selectSource("screen:999:0"),
