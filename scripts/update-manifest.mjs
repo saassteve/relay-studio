@@ -24,7 +24,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const MANIFEST = "latest-mac.yml";
-const VERSION = /^\d+\.\d+\.\d+$/;
+const NUMBER = "(?:0|[1-9]\\d*)";
+const PRERELEASE = "(?:0|[1-9]\\d*|\\d*[A-Za-z-][\\dA-Za-z-]*)";
+const VERSION = new RegExp(
+  `^${NUMBER}\\.${NUMBER}\\.${NUMBER}` +
+    `(?:-${PRERELEASE}(?:\\.${PRERELEASE})*)?` +
+    "(?:\\+[\\dA-Za-z-]+(?:\\.[\\dA-Za-z-]+)*)?$",
+);
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*\.zip$/;
 const SHA512 = /^[A-Za-z0-9+/]{86}==$/;
 
@@ -51,7 +57,9 @@ export function chosenFile(files, arm64Mac) {
 
 export async function describe(version, zips) {
   if (!VERSION.test(version))
-    throw new Error(`"${version}" is not a version like 1.2.3.`);
+    throw new Error(
+      `"${version}" is not a version like 1.2.3 or 1.2.3-beta.1.`,
+    );
   const files = [];
   for (const zip of zips) {
     const url = path.basename(zip);

@@ -276,6 +276,9 @@ test("reversible sections, captions, presentation, access and offline shell", as
     .getByRole("button", { name: "Hello", exact: true })
     .click();
   await page.getByRole("button", { name: "Cut 1 selected word" }).click();
+  await expect(
+    page.getByRole("button", { name: "Select words to cut", exact: true }),
+  ).toBeVisible();
   await expect(page.locator(".studio-workbench .error")).toHaveCount(0);
   await tab.getByRole("tab", { name: /Look/ }).click();
   await page.getByLabel("Shape and resolution").selectOption("1080x1080");

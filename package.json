@@ -1,6 +1,6 @@
 {
   "name": "relay-video",
-  "version": "0.7.1-local.2",
+  "version": "0.7.1",
   "private": true,
   "type": "module",
   "license": "MIT",

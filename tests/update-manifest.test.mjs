@@ -119,6 +119,39 @@ test("electron-updater reads the manifest and picks the right ZIP for each Mac",
   }
 });
 
+test("preview versions round-trip through the manifest and electron-updater", async () => {
+  const r = release();
+  try {
+    const {
+      parseUpdateInfo,
+    } = require("electron-updater/out/providers/Provider");
+    for (const version of ["0.7.1-local.2", "1.2.3-beta.1+build.42"]) {
+      const text = await write(version, r.folder, r.paths);
+      assert.equal((await verify(version, r.folder)).version, version);
+      assert.equal(
+        parseUpdateInfo(text, "latest-mac.yml", "test").version,
+        version,
+      );
+    }
+    for (const version of [
+      "1.2.3-",
+      "1.2.3-beta..1",
+      "1.2.3-01",
+      "01.2.3",
+      "1.2.3+",
+    ]) {
+      await assert.rejects(describe(version, r.paths), /not a version/);
+      const text = serialize({
+        version,
+        files: (await describe("1.2.3", r.paths)).files,
+      });
+      assert.throws(() => parse(text), /no version/);
+    }
+  } finally {
+    r.remove();
+  }
+});
+
 test("a manifest that no longer matches its files is refused", async () => {
   const r = release();
   try {
