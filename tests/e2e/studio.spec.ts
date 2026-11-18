@@ -337,9 +337,9 @@ test("reversible sections, captions, presentation, access and offline shell", as
     .getByLabel("Video password", { exact: true })
     .fill("review-password");
   await page.getByLabel("Allow file downloads").uncheck();
-  const link = await page
-    .getByRole("textbox", { name: "Share link", exact: true })
-    .inputValue();
+  await expect(
+    page.getByRole("textbox", { name: "Share link", exact: true }),
+  ).toBeDisabled();
   // The dialog's own button saves, so a typed password can't be lost.
   await page
     .getByRole("button", { name: "Save and close", exact: true })
@@ -347,6 +347,12 @@ test("reversible sections, captions, presentation, access and offline shell", as
   await expect(
     page.getByText("Sharing settings saved", { exact: true }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await page.getByText("Share page on this computer").click();
+  const link = await page
+    .getByRole("textbox", { name: "Share link", exact: true })
+    .inputValue();
+  await page.getByRole("button", { name: "Done", exact: true }).click();
   const guest = await browser.newContext();
   const watch = await guest.newPage();
   await watch.goto(link);

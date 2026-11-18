@@ -256,7 +256,7 @@ It also keeps itself up to date: once a day it asks GitHub whether there is a ne
 
 AI providers are off until you connect one, and Relay asks before a transcript leaves your computer.
 
-Share links from the Mac app point to your own computer, so they work while Relay is running. For links that work for anyone, anywhere, [connect a Relay server](docs/LINKS.md): only the finished videos you choose to send go there.
+Record and edit on your Mac, then download a file or [connect an online workspace](docs/LINKS.md) to create a share link. Before uploading, choose who can watch, when the link expires and whether to show a download button. Relay shows where the video will be stored. Your workspace administrator can access uploaded videos.
 
 ## Good to know
 

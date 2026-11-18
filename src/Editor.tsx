@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { api, bytes, clock, mediaURL, type Clip } from "./types";
 import { ShareSettings } from "./ShareSettings";
+import { OnlineSharing } from "./OnlineSharing";
 import { AnalyticsPanel } from "./AnalyticsPanel";
 import { usePlayback, trackCTA } from "./usePlayback";
 import { StudioWorkbench, type WorkbenchHandle } from "./StudioWorkbench";
@@ -208,71 +209,8 @@ export function Editor({
     if (Math.floor(position.current) !== second) setTime(second);
     position.current = t;
   }, []);
-  // A connected server turns "send the file" into "send a link".
-  const [cloud, setCloud] = useState<{
-      connected: boolean;
-      url?: string;
-    } | null>(null),
-    [sendingLink, setSendingLink] = useState(false);
-  useEffect(() => {
-    if (!sharing || !localOnly) return;
-    let current = true;
-    void api<{ connected: boolean; url?: string }>("/api/cloud")
-      .then((c) => current && setCloud(c))
-      .catch(() => current && setCloud({ connected: false }));
-    return () => {
-      current = false;
-    };
-  }, [sharing]);
-  const linkIsOld =
-    Boolean(clip.cloud) &&
-    (pending || (clip.cloud?.revision ?? 0) < (clip.revision ?? 0));
-  const sendLink = async () => {
-    setSendingLink(true);
-    setError("");
-    try {
-      if (pending && !(await draft.current?.publish()))
-        return setError(
-          "The video couldn’t be updated just now. Close this and try Update video again.",
-        );
-      update(
-        await api<Clip>(`/api/videos/${clip.id}/cloud`, { method: "POST" }),
-      );
-      notify("Your link is ready");
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setSendingLink(false);
-    }
-  };
-  const removeLink = async () => {
-    if (
-      !(await confirmDialog({
-        title: "Take this link down?",
-        body: "The video is removed from the server and the link stops working for everyone. Your copy here is not touched.",
-        confirm: "Take link down",
-        cancel: "Keep link",
-        destructive: true,
-      }))
-    )
-      return;
-    try {
-      update(
-        await api<Clip>(`/api/videos/${clip.id}/cloud`, { method: "DELETE" }),
-      );
-      notify("Link taken down");
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  };
-  const copyLink = async () => {
-    try {
-      await navigator.clipboard.writeText(clip.cloud!.url);
-      notify("Link copied");
-    } catch {
-      setError("Clipboard unavailable. Select and copy the link below.");
-    }
-  };
+  const [cloudConnected, setCloudConnected] = useState(false);
+  const [sendingLink, setSendingLink] = useState(false);
   // However the dialog is closed, what was typed in it is kept.
   const turnOffLink = async () => {
     if (
@@ -294,9 +232,12 @@ export function Editor({
     }
   };
   const closeShare = async () => {
-    if (await saveShare.current()) setSharing(false);
+    const saved = await saveShare.current();
+    if (saved) setSharing(false);
+    return saved;
   };
   const copy = async () => {
+    if (!(await saveShare.current())) return;
     try {
       await navigator.clipboard.writeText(`${location.origin}/s/${clip.token}`);
       notify("Share link copied");
@@ -889,81 +830,28 @@ export function Editor({
           )}
           {localOnly ? (
             <>
-              {!cloud?.connected ? (
-                <p className="share-note">
-                  Relay is running only on this computer, so a link wouldn’t
-                  open for anyone else. Download the video and send the file.
-                </p>
-              ) : clip.cloud ? (
-                <>
-                  <label className="share-link">
-                    <Link size={18} />
-                    <input
-                      aria-label="Link anyone can open"
-                      readOnly
-                      value={clip.cloud.url}
-                      onFocus={(e) => e.target.select()}
-                    />
-                    <button
-                      className="btn primary"
-                      onClick={() => void copyLink()}
-                    >
-                      <Copy size={14} />
-                      Copy link
-                    </button>
-                  </label>
-                  <div className="share-actions" role="status">
-                    {(linkIsOld || sendingLink) && (
-                      <>
-                        <span className="small">
-                          {sendingLink
-                            ? "Sending the new version…"
-                            : "This link plays an older version."}
-                        </span>
-                        <button
-                          className="btn small"
-                          disabled={sendingLink || updating}
-                          onClick={() => void sendLink()}
-                        >
-                          Update link
-                        </button>
-                      </>
-                    )}
-                    <button
-                      className="text-button danger"
-                      disabled={sendingLink}
-                      onClick={() => void removeLink()}
-                    >
-                      Take link down
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <p className="share-note">
-                    Send this video to {new URL(cloud.url!).host} to get a link
-                    anyone can open.
-                  </p>
-                  <div className="share-actions" role="status">
-                    <button
-                      className="btn primary"
-                      disabled={sendingLink || updating}
-                      onClick={() => void sendLink()}
-                    >
-                      <Link size={16} />
-                      {sendingLink
-                        ? "Sending your video…"
-                        : pending
-                          ? "Update and get a link"
-                          : "Get a link"}
-                    </button>
-                  </div>
-                </>
-              )}
+              <OnlineSharing
+                clip={clip}
+                onChange={update}
+                notify={notify}
+                pending={pending}
+                updating={updating || sendingLink}
+                prepare={async () =>
+                  !pending || Boolean(await draft.current?.publish())
+                }
+                onBusy={setSendingLink}
+                onConnected={setCloudConnected}
+                onConnect={async () => {
+                  if (!(await closeShare())) return;
+                  dispatchEvent(
+                    new CustomEvent("relay:open-settings", { detail: "cloud" }),
+                  );
+                }}
+              />
               {pending || updating ? (
                 <div className="share-actions" role="status">
                   <button
-                    className={`btn ${cloud?.connected ? "" : "primary"}`}
+                    className={`btn ${cloudConnected ? "" : "primary"}`}
                     disabled={updating || sendingLink}
                     onClick={() => void publishHere(true)}
                   >
@@ -983,30 +871,12 @@ export function Editor({
                 </div>
               ) : (
                 <a
-                  className={`btn share-download ${cloud?.connected ? "" : "primary"}`}
+                  className={`btn share-download ${cloudConnected ? "" : "primary"}`}
                   href={`${mediaURL(clip, token)}?download=1`}
                 >
                   <Download size={16} />
                   Download video
                 </a>
-              )}
-              {cloud && !cloud.connected && (
-                <p className="small muted share-connect">
-                  Want a link anyone can open?{" "}
-                  <button
-                    className="text-button"
-                    onClick={() => {
-                      void closeShare();
-                      dispatchEvent(
-                        new CustomEvent("relay:open-settings", {
-                          detail: "cloud",
-                        }),
-                      );
-                    }}
-                  >
-                    Connect a server
-                  </button>
-                </p>
               )}
               <details
                 className="cut-more share-local"
@@ -1016,6 +886,10 @@ export function Editor({
               >
                 <summary>Share page on this computer</summary>
                 <div className="cut-more-body">
+                  <p className="small muted">
+                    This page is available while Relay is open on this computer.
+                    People outside this computer need an online link.
+                  </p>
                   {!clip.token && (
                     <p className="small muted" role="status">
                       Creating the page…
@@ -1028,12 +902,19 @@ export function Editor({
                         <input
                           aria-label="Share link"
                           readOnly
-                          value={`${location.origin}/s/${clip.token}`}
+                          value={
+                            shareDirty
+                              ? ""
+                              : `${location.origin}/s/${clip.token}`
+                          }
+                          disabled={shareDirty}
                           onFocus={(e) => e.target.select()}
                         />
                         <button className="btn" onClick={() => void copy()}>
                           <Copy size={14} />
-                          Copy link
+                          {shareDirty
+                            ? "Save access and copy link"
+                            : "Copy link"}
                         </button>
                       </label>
                       <ShareSettings
@@ -1063,12 +944,13 @@ export function Editor({
                 <input
                   aria-label="Share link"
                   readOnly
-                  value={`${location.origin}/s/${clip.token}`}
+                  value={shareDirty ? "" : `${location.origin}/s/${clip.token}`}
+                  disabled={shareDirty}
                   onFocus={(e) => e.target.select()}
                 />
                 <button className="btn primary" onClick={() => void copy()}>
                   <Copy size={14} />
-                  Copy link
+                  {shareDirty ? "Save access and copy link" : "Copy link"}
                 </button>
               </label>
               <ShareSettings

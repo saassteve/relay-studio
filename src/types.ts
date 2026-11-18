@@ -30,7 +30,17 @@ export interface Clip {
   downloadAllowed?: boolean;
   author?: string;
   // The link on a connected server, and which revision of the video it plays.
-  cloud?: { url: string; revision: number; at: string };
+  cloud?: {
+    url: string;
+    revision: number;
+    at: string;
+    unverified?: boolean;
+    manageUrl?: string;
+    share?: Pick<
+      ShareConfig,
+      "access" | "download" | "expiresAt" | "hasPassword"
+    >;
+  };
   // Whether the share page shows "Made with Relay".
   credit?: boolean;
   cta?: { label: string; url: string };

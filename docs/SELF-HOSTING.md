@@ -40,7 +40,7 @@ Limits: imports 1 GB, project bundles 2 GB expanded, recording sessions 8 GB.
 
 ## Send videos from the Mac app to your server
 
-Keep recording and editing on your Mac, and send only finished videos to the server for a link anyone can open. On the server, open **Settings → Links that work anywhere** and copy the address and access key. In the app, paste them into the same place in Settings. See [Links that work for anyone](LINKS.md).
+Keep recording and editing on your Mac, and send only finished videos to the server for a link anyone can open. On the server, open **Settings → Online sharing** and copy the workspace address and connection key. In the app, paste them into Settings → Online sharing. Use the sharing-only connection key for devices. The integration key grants broader API and MCP access. See [Links that work for anyone](LINKS.md).
 
 ## Run the Mac app against your server
 

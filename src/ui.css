@@ -2933,3 +2933,68 @@ main[tabindex="-1"]:focus-visible {
   display: block;
   margin-top: 6px;
 }
+
+.online-sharing {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.online-sharing h3,
+.online-sharing p {
+  margin: 0;
+}
+.online-sharing .share-note {
+  margin: 0;
+}
+.online-sharing .text-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-self: start;
+}
+.share-audience {
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+}
+.share-audience span {
+  color: var(--muted);
+}
+.sharing-setup {
+  display: grid;
+  gap: 12px;
+}
+.sharing-setup h4,
+.sharing-setup p {
+  margin: 0;
+}
+.sharing-setup .cloud-connected {
+  flex-wrap: wrap;
+}
+.sharing-setup .cut-more p {
+  margin: 12px 0;
+}
+.online-sharing .field,
+.sharing-setup .field {
+  margin: 0;
+}
+.online-sharing .device-grid {
+  grid-template-columns: 1fr;
+  margin: 0;
+}
+.online-sharing .device-grid label {
+  display: grid;
+  gap: 6px;
+}
+@media (max-width: 600px) {
+  .online-sharing .device-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+fieldset.share-settings {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}

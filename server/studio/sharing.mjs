@@ -16,6 +16,45 @@ const cookie = (req, name) =>
     .map((p) => p.trim())
     .find((p) => p.startsWith(name + "="))
     ?.slice(name.length + 1);
+export const sharingConfig = (v) => ({
+  access: "link",
+  download: true,
+  version: 0,
+  ...parseJSON(v.share_config, {}),
+});
+
+export function updatedSharingConfig(previous, b, minimumPasswordLength = 6) {
+  if (!b || typeof b !== "object" || Array.isArray(b))
+    throw problem(400, "Choose who can watch before sharing this video.");
+  if (!["link", "workspace", "invited"].includes(b.access || previous.access))
+    throw problem(400, "Choose a supported access level.");
+  if (b.expiresAt && !Number.isFinite(Date.parse(b.expiresAt)))
+    throw problem(400, "Choose a valid expiration date.");
+  const c = {
+    ...previous,
+    access: b.access || previous.access,
+    download:
+      b.download !== undefined ? Boolean(b.download) : previous.download,
+    expiresAt:
+      b.expiresAt === undefined ? previous.expiresAt : b.expiresAt || null,
+    invitedEmails: Array.isArray(b.invitedEmails)
+      ? b.invitedEmails.map((e) => String(e).trim().toLowerCase()).slice(0, 100)
+      : previous.invitedEmails || [],
+    version: previous.version + 1,
+  };
+  if (b.password !== undefined) {
+    if (b.password && String(b.password).length < minimumPasswordLength)
+      throw problem(
+        400,
+        "Use a video password of at least " +
+          minimumPasswordLength +
+          " characters.",
+      );
+    c.passwordHash = b.password ? passwordHash(String(b.password)) : null;
+  }
+  return c;
+}
+
 export function registerSharing({
   app,
   db,
@@ -27,12 +66,7 @@ export function registerSharing({
   find,
   serialize,
 }) {
-  const config = (v) => ({
-    access: "link",
-    download: true,
-    version: 0,
-    ...parseJSON(v.share_config, {}),
-  });
+  const config = sharingConfig;
   const byToken = (token) => {
     const v = db.prepare("SELECT * FROM videos WHERE token=?").get(token);
     if (!v) throw problem(404, "This link is unavailable or has been revoked.");
@@ -131,29 +165,7 @@ export function registerSharing({
     const v = find(req.params.id),
       previous = config(v),
       b = req.body;
-    if (!["link", "workspace", "invited"].includes(b.access || previous.access))
-      throw problem(400, "Choose a supported access level.");
-    if (b.expiresAt && !Number.isFinite(Date.parse(b.expiresAt)))
-      throw problem(400, "Choose a valid expiration date.");
-    const c = {
-      ...previous,
-      access: b.access || previous.access,
-      download:
-        b.download !== undefined ? Boolean(b.download) : previous.download,
-      expiresAt:
-        b.expiresAt === undefined ? previous.expiresAt : b.expiresAt || null,
-      invitedEmails: Array.isArray(b.invitedEmails)
-        ? b.invitedEmails
-            .map((e) => String(e).trim().toLowerCase())
-            .slice(0, 100)
-        : previous.invitedEmails || [],
-      version: previous.version + 1,
-    };
-    if (b.password !== undefined) {
-      if (b.password && String(b.password).length < 6)
-        throw problem(400, "Use a video password of at least six characters.");
-      c.passwordHash = b.password ? passwordHash(String(b.password)) : null;
-    }
+    const c = updatedSharingConfig(previous, b);
     // Where the owner has turned public links off, only the owner may loosen one.
     const until = (value) => (value ? Date.parse(value) : Infinity);
     if (

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Copy, Code2 } from "lucide-react";
 import { api, type Clip, type ShareConfig } from "./types";
 export function ShareSettings({
@@ -30,6 +30,7 @@ export function ShareSettings({
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const copy = async (embed = false) => {
+    if (!(await save())) return;
     const url = `${location.origin}${embed ? "/embed/" : "/s/"}${clip.token}${!embed && time > 0 ? `?t=${Math.floor(time)}` : ""}`;
     try {
       await navigator.clipboard.writeText(
@@ -53,34 +54,45 @@ export function ShareSettings({
     (c.expiresAt || "") !== (initial.expiresAt || "") ||
     emails !== (clip.shareConfig?.invitedEmails || []).join(", ");
   useEffect(() => onDirty?.(dirty), [dirty, onDirty]);
-  const save = async () => {
-    if (!dirty) return true;
-    setBusy(true);
-    setError("");
-    try {
-      const v = await api<Clip>(`/api/videos/${clip.id}/share-settings`, {
-        method: "PUT",
-        body: JSON.stringify({
-          ...c,
-          invitedEmails: emails
-            .split(",")
-            .map((e) => e.trim())
-            .filter(Boolean),
-          ...(clearPassword ? { password: "" } : password ? { password } : {}),
-        }),
-      });
-      onChange(v);
-      setC({ access: "link", download: true, ...v.shareConfig });
-      setPassword("");
-      setClearPassword(false);
-      notify("Sharing settings saved");
-      return true;
-    } catch (e) {
-      setError((e as Error).message);
-      return false;
-    } finally {
-      setBusy(false);
-    }
+  const saving = useRef<Promise<boolean> | null>(null);
+  const save = (): Promise<boolean> => {
+    if (saving.current) return saving.current;
+    if (!dirty) return Promise.resolve(true);
+    saving.current = (async () => {
+      setBusy(true);
+      setError("");
+      try {
+        const v = await api<Clip>(`/api/videos/${clip.id}/share-settings`, {
+          method: "PUT",
+          body: JSON.stringify({
+            ...c,
+            invitedEmails: emails
+              .split(",")
+              .map((e) => e.trim())
+              .filter(Boolean),
+            ...(clearPassword
+              ? { password: "" }
+              : password
+                ? { password }
+                : {}),
+          }),
+        });
+        onChange(v);
+        setC({ access: "link", download: true, ...v.shareConfig });
+        setPassword("");
+        setClearPassword(false);
+        notify("Sharing settings saved");
+        return true;
+      } catch (e) {
+        setError((e as Error).message);
+        return false;
+      } finally {
+        setBusy(false);
+      }
+    })().finally(() => {
+      saving.current = null;
+    });
+    return saving.current;
   };
   if (saveRef) saveRef.current = save;
   // Once these settings are gone from the screen there is nothing left to save.
@@ -99,7 +111,12 @@ export function ShareSettings({
     : ([1, 7, 30].find((d) => Math.abs(daysLeft - d) < 0.01)?.toString() ??
       "keep");
   return (
-    <div className="share-settings" aria-busy={busy}>
+    <fieldset
+      className="share-settings"
+      disabled={busy}
+      aria-busy={busy}
+      aria-label="Sharing access settings"
+    >
       <div className="device-grid">
         <label>
           Who can watch
@@ -202,7 +219,17 @@ export function ShareSettings({
           )}
         </div>
       </div>
+      {dirty && (
+        <p className="small muted" role="status">
+          {busy ? "Saving access…" : "Access changes are waiting to be saved."}
+        </p>
+      )}
       <div className="actions share-settings-actions">
+        {dirty && (
+          <button className="btn small" onClick={() => void save()}>
+            Save access
+          </button>
+        )}
         <button className="text-button small" onClick={() => void copy()}>
           <Copy size={14} />
           Link to {Math.floor(time / 60)}:
@@ -218,6 +245,6 @@ export function ShareSettings({
           {error}
         </div>
       )}
-    </div>
+    </fieldset>
   );
 }

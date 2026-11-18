@@ -319,9 +319,11 @@ export default function App() {
   const removeClip = async (c: Clip) => {
     if (
       !(await confirmDialog({
-        title: "Delete this video?",
-        body: `“${c.title}”, its comments and its share link will be permanently deleted.`,
-        confirm: "Delete video",
+        title: c.cloud ? "Delete this local copy?" : "Delete this video?",
+        body: c.cloud
+          ? `“${c.title}” will be deleted from this device. An online copy may still be shared. Use Stop sharing first to remove that copy too. You can also manage it in its online workspace.`
+          : `“${c.title}”, its comments and its share link will be permanently deleted.`,
+        confirm: c.cloud ? "Delete local copy" : "Delete video",
         cancel: "Keep video",
         destructive: true,
       }))
